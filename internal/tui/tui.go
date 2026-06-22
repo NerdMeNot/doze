@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -143,10 +144,17 @@ type model struct {
 	width  int
 	height int
 
-	cursor  int
-	follow  bool
-	logVP   viewport.Model
-	logErr  string
+	cursor   int
+	follow   bool
+	logVP    viewport.Model
+	logErr   string
+	logLines []string // raw log lines of the selected instance (for copy mode)
+
+	// copy mode: a frozen, keyboard-navigable selection over the logs.
+	copyMode   bool
+	copyLines  []string
+	copyCursor int
+	copyAnchor int // -1 = no range yet (just the cursor line)
 
 	filtering bool
 	filter    textinput.Model
@@ -288,12 +296,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v, ok := m.selected(); ok && msg.name == v.Name {
 			if msg.err != nil {
 				m.logErr = msg.err.Error()
-				m.logVP.SetContent("")
+				if !m.copyMode {
+					m.logVP.SetContent("")
+				}
 			} else {
 				m.logErr = ""
-				m.logVP.SetContent(renderLogs(msg.lines))
-				if m.follow {
-					m.logVP.GotoBottom()
+				m.logLines = msg.lines
+				if !m.copyMode { // freeze the view while copying
+					m.logVP.SetContent(renderLogs(msg.lines))
+					if m.follow {
+						m.logVP.GotoBottom()
+					}
 				}
 			}
 		}
@@ -324,6 +337,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // in the sidebar selects that instance.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	const headerRows = 2 // title + rule above the body
+	if m.copyMode { // only scroll the frozen logs; ignore selection changes
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.logVP.LineUp(2)
+		case tea.MouseButtonWheelDown:
+			m.logVP.LineDown(2)
+		}
+		return m, nil
+	}
 	overSidebar := msg.X < m.sidebarW()
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
@@ -360,6 +382,9 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.copyMode {
+		return m.handleCopyKey(msg)
+	}
 	if m.filtering {
 		switch msg.String() {
 		case "enter", "esc":
@@ -414,6 +439,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown", "ctrl+d":
 		m.logVP.HalfViewDown()
 		return m, nil
+	case "c":
+		if len(m.logLines) > 0 { // enter copy mode on the selected instance's logs
+			m.copyMode = true
+			m.copyLines = m.logLines
+			m.copyCursor = len(m.copyLines) - 1
+			m.copyAnchor = -1
+			m.refreshCopyView()
+		}
+		return m, nil
 	case "r":
 		return m, refresh(m.client)
 	}
@@ -432,6 +466,95 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handleCopyKey drives copy mode: move a line cursor, optionally anchor a range,
+// then copy the selection to the system clipboard.
+func (m model) handleCopyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	last := len(m.copyLines) - 1
+	exit := func() {
+		m.copyMode, m.copyAnchor = false, -1
+		m.logVP.SetContent(renderLogs(m.logLines))
+		if m.follow {
+			m.logVP.GotoBottom()
+		}
+	}
+	switch msg.String() {
+	case "esc", "q", "ctrl+c":
+		exit()
+		return m, nil
+	case "up", "k":
+		m.copyCursor = max(0, m.copyCursor-1)
+	case "down", "j":
+		m.copyCursor = min(last, m.copyCursor+1)
+	case "pgup", "ctrl+u":
+		m.copyCursor = max(0, m.copyCursor-10)
+	case "pgdown", "ctrl+d":
+		m.copyCursor = min(last, m.copyCursor+10)
+	case "g", "home":
+		m.copyCursor = 0
+	case "G", "end":
+		m.copyCursor = last
+	case "v", " ": // toggle selection anchor
+		if m.copyAnchor < 0 {
+			m.copyAnchor = m.copyCursor
+		} else {
+			m.copyAnchor = -1
+		}
+	case "a": // select all
+		m.copyAnchor, m.copyCursor = 0, last
+	case "c", "y", "enter":
+		lo, hi := m.copyRange()
+		text := strings.Join(m.copyLines[lo:hi+1], "\n")
+		err := clipboard.WriteAll(text)
+		exit()
+		if err != nil {
+			m.setFlash(stErr.Render("✗ copy failed: " + err.Error()))
+		} else {
+			m.setFlash(stGreen.Render(fmt.Sprintf("✓ copied %d line(s) to clipboard", hi-lo+1)))
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
+	m.refreshCopyView()
+	return m, nil
+}
+
+// copyRange is the inclusive selected line range (just the cursor if no anchor).
+func (m model) copyRange() (int, int) {
+	if m.copyAnchor < 0 {
+		return m.copyCursor, m.copyCursor
+	}
+	lo, hi := m.copyAnchor, m.copyCursor
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return lo, hi
+}
+
+// refreshCopyView re-renders the frozen logs with the cursor line and selected
+// range highlighted, and keeps the cursor in view.
+func (m *model) refreshCopyView() {
+	lo, hi := m.copyRange()
+	w := m.logVP.Width
+	cur := lipgloss.NewStyle().Background(cAccent).Foreground(lipgloss.Color("#1A1C22")).Width(w)
+	sel := lipgloss.NewStyle().Background(cSel).Foreground(cText).Width(w)
+	var b strings.Builder
+	for i, ln := range m.copyLines {
+		disp := truncate(ln, w)
+		switch {
+		case i == m.copyCursor:
+			b.WriteString(cur.Render(disp))
+		case i >= lo && i <= hi:
+			b.WriteString(sel.Render(disp))
+		default:
+			b.WriteString(stText.Render(disp))
+		}
+		b.WriteByte('\n')
+	}
+	m.logVP.SetContent(strings.TrimRight(b.String(), "\n"))
+	m.logVP.SetYOffset(max(0, m.copyCursor-m.logVP.Height/2))
 }
 
 // onSelect refetches logs immediately when the selection moves.
@@ -810,6 +933,10 @@ func (m model) viewLogs(v control.InstanceView, w int) string {
 	if m.follow {
 		mode = stGreen.Render("following")
 	}
+	if m.copyMode {
+		lo, hi := m.copyRange()
+		mode = stAccent.Render(fmt.Sprintf("COPY · %d line(s)", hi-lo+1))
+	}
 	title := stLabel.Render("logs ") + stFaint.Render("· "+v.Name)
 	gap := max(1, w-4-lipgloss.Width(title)-lipgloss.Width(mode))
 	head := title + strings.Repeat(" ", gap) + mode
@@ -831,14 +958,21 @@ func (m model) viewLogs(v control.InstanceView, w int) string {
 
 // ── footer ────────────────────────────────────────────────────────────────
 func (m model) viewFooter() string {
+	key := func(k, label string) string { return stAccent.Render(k) + stDim.Render(" "+label) }
+	sep := stFaint.Render("  ·  ")
 	if m.filtering {
 		return stAccent.Render(m.filter.View()) + stFaint.Render("   enter/esc")
 	}
-	key := func(k, label string) string { return stAccent.Render(k) + stDim.Render(" "+label) }
+	if m.copyMode {
+		return strings.Join([]string{
+			key("↑↓", "move"), key("v", "select"), key("a", "all"),
+			key("c", "copy"), key("esc", "cancel"),
+		}, sep)
+	}
 	return strings.Join([]string{
 		key("↑↓", "select"), key("b", "boot"), key("d", "reap"), key("R", "restart"),
-		key("f", "follow"), key("/", "filter"), key("r", "refresh"), key("q", "quit"),
-	}, stFaint.Render("  ·  "))
+		key("f", "follow"), key("c", "copy logs"), key("/", "filter"), key("q", "quit"),
+	}, sep)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

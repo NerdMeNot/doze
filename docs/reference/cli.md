@@ -67,6 +67,10 @@ refreshes continuously. Select a row with `↑/↓`, then:
 `r` refresh · `q` quit. **Mouse:** click an instance to select it; scroll over
 the sidebar to move the selection, or over the logs pane to scroll the logs
 (scrolling up pauses follow; scrolling to the bottom resumes it).
+**Copy logs:** press `c` to enter copy mode, move with `↑/↓`, press `v` to
+anchor a selection (or `a` for all), then `c`/`y` copies the selected lines to
+the system clipboard (`esc` cancels). For piping/redirecting, `doze logs
+<instance>` prints to stdout instead.
 
 ### `doze logs [instance] [-f]`
 With no argument, tail the daemon's log. With an instance, show that backend's
