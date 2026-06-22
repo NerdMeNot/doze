@@ -164,7 +164,8 @@ New here? Read these in order:
 
 1. **[Getting started](docs/guide/getting-started.md)** — from zero to a running app, step by step.
 2. **[Core concepts](docs/guide/concepts.md)** — the daemon, lazy boot, reaping, convergence, endpoints.
-3. **[Recipes](docs/recipes/README.md)** — copy-pasteable examples for every engine and workflow.
+3. **[Files & storage](docs/guide/files-and-storage.md)** — where things live, what to commit, splitting config.
+4. **[Recipes](docs/recipes/README.md)** — copy-pasteable examples for every engine and workflow.
 
 Reference, when you need it:
 

@@ -1,12 +1,12 @@
 # Recipes — SNS (pub/sub)
 
-A ground-up, pure-Go SNS implementation. Create topics and subscriptions, apply
+A ground-up, pure-Go SNS built into doze. Create topics and subscriptions, apply
 message-attribute filter policies, and fan out to SQS queues or HTTP(S) webhooks.
 
 ## SNS → SQS fanout
 
-Name the backing `sqs` instance; doze holds it running while SNS is up (a
-dependency, like FerretDB→Postgres) and delivers to its queues.
+Name the backing `sqs` instance; doze holds it running while SNS is up and
+delivers to its queues.
 
 ```hcl
 sqs "jobs" {
@@ -30,48 +30,62 @@ eval "$(doze env)"             # AWS_ENDPOINT_URL_SNS / _SQS + creds
 aws sns publish \
   --topic-arn arn:aws:sns:us-east-1:000000000000:signups \
   --message "welcome!"
-# the message arrives in the jobs/emails queue
-aws sqs receive-message --queue-url \
-  "$(aws sqs get-queue-url --queue-name emails --query QueueUrl --output text)"
+
+# it lands in the jobs/emails queue:
+url=$(aws sqs get-queue-url --queue-name emails --query QueueUrl --output text)
+aws sqs receive-message --queue-url "$url"
 ```
 
-Without `raw`, the queue receives the standard SNS JSON notification envelope
-(`{"Type":"Notification","Message":...,"MessageAttributes":...}`).
+Drop `raw = true` and the queue receives the standard SNS JSON envelope
+(`{"Type":"Notification","Message":...,"MessageAttributes":...}`) instead of the
+bare body.
 
-## Filter policies
+## Multiple subscribers + filter policies
 
-Only matching messages are delivered. Operators: exact list, `prefix`,
-`anything-but`, `exists`.
+A topic can fan out to several queues, each with its own filter. Operators:
+exact list, `prefix`, `anything-but`, `exists`.
 
 ```hcl
+sqs "bus" {
+  queue "email-svc" {}
+  queue "audit-svc" {}
+}
+
 sns "events" {
-  sqs = "jobs"
-  topic "signups" {}
-  subscribe "signups" {
+  sqs = "bus"
+  topic "user-events" {}
+
+  subscribe "user-events" {          # only signup/reset events
     protocol = "sqs"
-    endpoint = "emails"
+    endpoint = "email-svc"
     raw      = true
-    filter   = { eventType = ["created", "updated"] }
+    filter   = { type = ["signup", "password_reset"] }
+  }
+  subscribe "user-events" {          # everything, for the audit log
+    protocol = "sqs"
+    endpoint = "audit-svc"
+    raw      = true
   }
 }
 ```
 
 ```sh
-# matches the filter -> delivered
-aws sns publish --topic-arn arn:aws:sns:us-east-1:000000000000:signups \
+# delivered to email-svc AND audit-svc:
+aws sns publish --topic-arn arn:aws:sns:us-east-1:000000000000:user-events \
   --message '{"id":1}' \
-  --message-attributes '{"eventType":{"DataType":"String","StringValue":"created"}}'
-# does not match -> dropped
-aws sns publish --topic-arn arn:aws:sns:us-east-1:000000000000:signups \
+  --message-attributes '{"type":{"DataType":"String","StringValue":"signup"}}'
+
+# delivered to audit-svc only (filtered out of email-svc):
+aws sns publish --topic-arn arn:aws:sns:us-east-1:000000000000:user-events \
   --message '{"id":2}' \
-  --message-attributes '{"eventType":{"DataType":"String","StringValue":"deleted"}}'
+  --message-attributes '{"type":{"DataType":"String","StringValue":"login"}}'
 ```
 
 ## HTTP(S) webhook subscription
 
-doze performs the SubscriptionConfirmation handshake; your endpoint confirms by
+doze runs the SubscriptionConfirmation handshake; your endpoint confirms by
 fetching the `SubscribeURL` (or calling `ConfirmSubscription`), then receives
-`Notification` POSTs.
+`Notification` POSTs — perfect for testing webhook handlers locally.
 
 ```hcl
 sns "events" {
@@ -83,8 +97,20 @@ sns "events" {
 }
 ```
 
+## Wire it into an app
+
+```sh
+# Publisher and subscribers all read the injected endpoint + creds:
+doze run -- ./publisher
+doze run -- ./consumer
+```
+
+**Go:** `o.BaseEndpoint = aws.String(os.Getenv("AWS_ENDPOINT_URL_SNS"))`
+**Node v3:** `new SNSClient({ endpoint: process.env.AWS_ENDPOINT_URL_SNS })`
+**boto3:** `boto3.client("sns", endpoint_url=os.environ["AWS_ENDPOINT_URL_SNS"])`
+
 ## Notes
 
-- Topics/subscriptions declared in config are created on boot (`doze up`
-  re-converges). You can also Subscribe/Publish dynamically via the SDK.
+- Topics/subscriptions declared in config are created on boot (and re-converged by
+  `doze up`); you can also Subscribe/Publish dynamically via the SDK.
 - ARNs use the conventional local account `000000000000` and region `us-east-1`.

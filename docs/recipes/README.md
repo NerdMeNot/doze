@@ -41,5 +41,8 @@ buckets, queues, topics) — never data. Your app/migrations own the data.
 - [SQS](sqs.md) — queues, FIFO, DLQ + redrive
 - [SNS](sns.md) — topics, SNS→SQS fanout, filter policies, webhooks
 - [Workflows](workflows.md) — `run`/`env`, ephemeral test DBs, status/dash/logs, CI
-- [Config layout](config-layout.md) — multi-file `doze.d`, versions/lockfile, TLS, per-dev overrides
+- [Config layout](config-layout.md) — splitting config across `doze.d` files + per-dev overrides
 - [Full stacks](stacks.md) — polyglot apps end to end + framework wiring
+
+For where doze stores engines, data, sockets, and logs — and what to commit vs
+ignore — see the **[Files & storage guide](../guide/files-and-storage.md)**.

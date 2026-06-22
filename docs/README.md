@@ -11,6 +11,9 @@ Read these in order to build a working mental model:
    to a running app, explaining what you see at each step.
 2. **[Core concepts](guide/concepts.md)** — the daemon, lazy boot, idle reaping,
    convergence, endpoints, versions, and instance dependencies.
+3. **[Files & storage](guide/files-and-storage.md)** — where doze keeps engines,
+   data, sockets, and logs; what to commit vs ignore; and splitting config across
+   files.
 
 ## Do
 

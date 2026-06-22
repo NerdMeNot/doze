@@ -1,25 +1,30 @@
 # Recipes — Valkey & Kvrocks
 
-Both speak the Redis (RESP) protocol, so any redis client works. **Valkey** is
-in-memory (a cache); **Kvrocks** is RocksDB-backed (disk, low RAM) — a durable
-KV store that talks Redis.
+Both speak the Redis (RESP) protocol, so every redis client and library works
+unchanged. The difference is where the data lives:
 
-## In-memory cache (Valkey)
+- **Valkey** — in-memory, like Redis. Fast, volatile. Use it as a **cache**.
+- **Kvrocks** — RocksDB-backed (on disk). Redis API, durable storage. Use it as a
+  **persistent KV store** that survives reaps and restarts.
+
+## A cache (Valkey)
 
 ```hcl
 valkey "cache" {
-  version   = 9            # newest 9.x; or "9.1.0"
-  maxmemory = "256mb"
+  version   = 9            # newest 9.x; or pin "9.1.0"
+  maxmemory = "256mb"      # optional cap
   password  = "cache"      # optional
 }
 ```
 
 ```sh
-doze run -- sh -c 'redis-cli -u "$REDIS_URL" ping'
-eval "$(doze env)"; redis-cli -u "$REDIS_URL" set hello world
+doze run -- sh -c 'redis-cli -u "$REDIS_URL" ping'      # -> PONG
+eval "$(doze env)"
+redis-cli -u "$REDIS_URL" set greeting hello
+redis-cli -u "$REDIS_URL" get greeting
 ```
 
-## Durable KV (Kvrocks)
+## A durable KV store (Kvrocks)
 
 ```hcl
 kvrocks "store" {
@@ -28,10 +33,27 @@ kvrocks "store" {
 }
 ```
 
-Kvrocks keeps data on disk in its data dir, so it survives reaps and restarts —
-use it where you'd want Redis semantics without losing data when idle.
+Identical client experience, but writes persist to disk — stop touching it, let it
+reap, reconnect later, and your keys are still there.
 
-## Cache + durable store side by side
+## Connecting clients & GUIs
+
+Find the address and point any redis tool at it (RedisInsight, TablePlus, `redis-cli`):
+
+```sh
+doze status
+#   NAME    ENGINE   STATE   …   ENDPOINT
+#   cache   valkey   idle        127.0.0.1:6433
+redis-cli -h 127.0.0.1 -p 6433
+```
+
+If you set a `password`, pass it with `-a` (or it's already in `REDIS_URL`):
+
+```sh
+redis-cli -h 127.0.0.1 -p 6433 -a cache
+```
+
+## Cache + durable store together
 
 ```hcl
 valkey "cache" {
@@ -43,22 +65,32 @@ kvrocks "store" {
 }
 ```
 
-Both claim `REDIS_URL`, so when you declare more than one, use the per-instance
-variables:
+Both claim `REDIS_URL`, so with two of them use the per-instance variables:
 
 ```sh
 doze run -- sh -c '
-  redis-cli -u "$DOZE_CACHE_URL" set k v
-  redis-cli -u "$DOZE_STORE_URL" set k v
+  redis-cli -u "$DOZE_CACHE_URL" set session:42 active
+  redis-cli -u "$DOZE_STORE_URL" set user:42  "{...}"
 '
 ```
 
-## Connecting a GUI / app
-
-Each instance has its own doze endpoint; point your client at it (doze boots it
-on connect):
+## Common tasks
 
 ```sh
-doze status          # shows the ENDPOINT column, e.g. 127.0.0.1:6433
-redis-cli -h 127.0.0.1 -p 6433
+eval "$(doze env)"
+redis-cli -u "$REDIS_URL" flushall            # wipe everything
+redis-cli -u "$REDIS_URL" info keyspace       # how many keys
+redis-cli -u "$REDIS_URL" monitor             # watch commands live
+doze down cache                                # put it to sleep now
 ```
+
+## Tips
+
+- **Valkey is a drop-in Redis fork** — your `ioredis`/`redis-py`/`go-redis` code
+  needs no changes; just read `REDIS_URL`.
+- **Pick by durability:** ephemeral cache → `valkey`; data you don't want to lose
+  on a reap → `kvrocks`.
+- **`maxmemory`** (Valkey) caps memory; pair it with an eviction policy from your
+  client if you want LRU behavior.
+- Reaping is by connection count — a client that keeps a connection open keeps the
+  instance awake.

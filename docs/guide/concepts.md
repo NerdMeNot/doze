@@ -152,5 +152,8 @@ plus per-project state.
   projects/myapp-1a2b3c4d/                       # this project's data dirs, sockets, logs
 ```
 
+→ **[Files & storage](files-and-storage.md)** covers the full layout, what to
+commit vs ignore, relocating state, and cleaning up.
+
 Where to next: **[Recipes](../recipes/README.md)** for concrete patterns, or the
 **[Configuration reference](../reference/configuration.md)** for every field.

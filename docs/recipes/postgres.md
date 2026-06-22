@@ -1,14 +1,28 @@
 # Recipes — PostgreSQL
 
-doze runs real, unmodified PostgreSQL (14–17) and converges the declared
-database, roles, schemas, grants, and extensions on first boot.
+Real, unmodified PostgreSQL (14–17). On first boot doze creates the database and
+converges your declared roles, schemas, grants, and extensions — then gets out of
+the way. Everything below is a config plus the commands to use it.
 
-## Minimal app database
+- [A database for your app](#a-database-for-your-app)
+- [Connect a client or GUI](#connect-a-client-or-gui)
+- [Users, roles & permissions](#users-roles--permissions)
+- [Schemas](#schemas)
+- [Grants](#grants)
+- [Extensions](#extensions)
+- [Multiple databases & versions](#multiple-databases--versions)
+- [Migrations & seeding](#migrations--seeding)
+- [Reset a database](#reset-a-database)
+- [Tuning & tips](#tuning--tips)
+
+## A database for your app
+
+The 90% case — one database, one user that owns it:
 
 ```hcl
 postgres "app" {
-  version = 16          # newest 16.x; or an exact "16.14"
-  owner   = "app"       # role that owns the database
+  version = 16
+  owner   = "app"
   role "app" { password = "app" }
   grant {
     role       = "app"
@@ -19,37 +33,65 @@ postgres "app" {
 ```
 
 ```sh
-doze run -- npm test            # DATABASE_URL is injected
-doze psql app                   # open a shell (boots app if cold)
+doze run -- npm run dev     # DATABASE_URL is injected; the DB boots on first use
+doze psql app              # or open a SQL shell directly (boots `app` if cold)
 ```
 
-## Users and roles
+## Connect a client or GUI
 
-A "user" is just a role with `login` (the default). Group roles set
-`login = false` and are granted to members via `member_of`.
+doze gives each instance a stable address. Find it:
+
+```sh
+doze status
+#   NAME   ENGINE     STATE    …   ENDPOINT
+#   app    postgres   idle         127.0.0.1:6432
+```
+
+Point any tool at it — `psql`, TablePlus, DBeaver, pgAdmin, your ORM:
+
+| Field | Value |
+|---|---|
+| Host | `127.0.0.1` |
+| Port | from `doze status` (e.g. `6432`) |
+| Database | `app` (the instance name) |
+| User / Password | a role you declared, e.g. `app` / `app` |
+
+The connection cold-boots the instance just like any other client. Or grab the
+ready-made URL:
+
+```sh
+eval "$(doze env)"; echo "$DATABASE_URL"
+# postgresql://app:app@127.0.0.1:6432/app
+```
+
+## Users, roles & permissions
+
+A "user" is a role with `login` (the default). Group roles set `login = false`
+and are granted to members via `member_of`. A complete pattern — an app user, a
+read-only group, an analyst that inherits it, and an admin:
 
 ```hcl
-postgres "app" {
+postgres "shop" {
   version = 16
-  owner   = "app"
+  owner   = "shop"
 
-  role "app" {                  # login user
-    password         = "app"
+  role "shop" {                 # the app's login user
+    password         = "shop"
     connection_limit = 20
   }
-  role "readonly" {             # group role (no login)
-    login = false
-  }
-  role "analyst" {              # inherits readonly's privileges
+
+  role "readonly" { login = false }   # a group role to hang SELECT grants on
+
+  role "analyst" {              # a human who should only read
     password  = "analyst"
     member_of = ["readonly"]
   }
+
   role "admin" {
-    password    = "admin"
-    superuser   = true
-    createdb    = true
-    createrole  = true
-    valid_until = "2030-01-01"
+    password   = "admin"
+    superuser  = true
+    createdb   = true
+    createrole = true
   }
 }
 ```
@@ -57,7 +99,7 @@ postgres "app" {
 Role attributes: `password`, `login`, `superuser`, `createdb`, `createrole`,
 `replication`, `inherit`, `connection_limit`, `valid_until`, `member_of`.
 
-## Schemas and ownership
+## Schemas
 
 ```hcl
 postgres "app" {
@@ -72,29 +114,31 @@ postgres "app" {
 
 ## Grants
 
+Scope a grant with `database`, or with `schema` (+ optional `objects` to cover
+current *and future* objects):
+
 ```hcl
 postgres "shop" {
   version = 16
   owner   = "shop"
   role "shop"     { password = "shop" }
-  role "reporter" { password = "report" }
+  role "readonly" { login = false }
 
   grant {                       # full rights on the database
     role       = "shop"
     database   = "shop"
     privileges = ["ALL"]
   }
-  grant {                       # read all current + future tables in public
-    role       = "reporter"
+  grant {                       # read every current + future table in public
+    role       = "readonly"
     schema     = "public"
-    objects    = "tables"       # applies default privileges to future tables too
+    objects    = "tables"
     privileges = ["SELECT"]
   }
 }
 ```
 
-`grant` requires `role` + `privileges`; scope it with `database`, or
-`schema` (+ optional `objects`: `tables`/`sequences`/`functions`).
+`objects` accepts `tables`, `sequences`, or `functions`.
 
 ## Extensions
 
@@ -104,29 +148,24 @@ postgres "app" {
   owner      = "app"
   role "app" { password = "app" }
 
-  extensions = ["uuid-ossp", "pg_trgm"]    # simple: CREATE EXTENSION IF NOT EXISTS
+  extensions = ["uuid-ossp", "pg_trgm"]   # the simple case: CREATE EXTENSION IF NOT EXISTS
 
-  extension "vector" {                      # pin a version
-    version = "0.7.0"
-  }
-  extension "hstore" {
-    schema = "extensions"                   # install into a specific schema
-  }
+  extension "vector" { version = "0.7.0" }  # pin a version
+  extension "hstore" { schema  = "extensions" }   # install into a specific schema
 }
 ```
 
-For an extension that isn't in the binary's `share/`, point `source` at a bundle
-to build/install it — see [docs/EXTENSIONS.md](../EXTENSIONS.md).
+For an extension your binary doesn't ship, point `source` at a bundle to build it
+— see [Extensions](../EXTENSIONS.md).
 
-## Multiple databases in one project
+## Multiple databases & versions
 
-Declare several `postgres` blocks — each is its own instance with its own
-endpoint and lifecycle. When there's more than one, use `DOZE_<NAME>_URL` (the
-single `DATABASE_URL` is only set when exactly one Postgres is declared).
+Each `postgres` block is its own instance — own data, own endpoint, own lifecycle.
+Run different majors side by side without conflict:
 
 ```hcl
 postgres "app" {
-  version = 16
+  version = 17
   role "app" { password = "app" }
 }
 postgres "legacy" {
@@ -135,47 +174,58 @@ postgres "legacy" {
 }
 ```
 
-```sh
-doze run -- sh -c 'echo app=$DOZE_APP_URL legacy=$DOZE_LEGACY_URL'
-doze status        # both shown; each boots independently on first connect
-```
-
-## Dev tuning profile
-
-```hcl
-postgres "app" {
-  version         = 16
-  shared_buffers  = "16MB"
-  max_connections = 50
-  fsync           = false      # fast, not crash-safe — perfect for dev/tests
-  autovacuum      = false
-  encoding        = "UTF8"
-  locale          = "C"
-}
-```
-
-## Pinning versions
-
-```hcl
-postgres "app"   { version = 16 }        # newest available 16.x, pinned in doze.lock
-postgres "exact" { version = "16.14" }   # always exactly 16.14.0
-```
+With more than one Postgres, the friendly `DATABASE_URL` isn't set (it'd be
+ambiguous) — use the per-instance variable:
 
 ```sh
-doze versions postgres     # list what the mirror offers (installed/pinned marked)
+doze run -- sh -c 'echo "new=$DOZE_APP_URL  old=$DOZE_LEGACY_URL"'
 ```
 
-Commit `doze.lock` so teammates get byte-identical binaries. See
-[config-layout](config-layout.md#versions--the-lockfile).
+## Migrations & seeding
 
-## Throwaway database per test run
-
-`doze ephemeral` clones the instance copy-on-write (instant on APFS/reflink),
-runs your command against the clone, then destroys it.
+doze converges *structure* (database, roles, schemas, extensions); your tools own
+the **schema and data**. Run them with the injected connection string:
 
 ```sh
-doze ephemeral app -- pytest -n auto      # isolated real Postgres for the suite
-doze ephemeral app                        # boot a disposable DB, print its URL, wait
+doze run -- npx prisma migrate dev
+doze run -- bin/rails db:migrate db:seed
+doze run -- alembic upgrade head
+doze run -- ./scripts/seed.sh        # reads DATABASE_URL
 ```
 
-See [workflows](workflows.md#ephemeral-databases) for parallel-test patterns.
+## Reset a database
+
+Sometimes you want a clean slate:
+
+```sh
+doze down app                                   # stop it
+rm -rf "$(doze doctor | awk '/project/{print $3}')/clusters/app"
+doze psql app                                   # next connect re-provisions + converges
+```
+
+Or use a **disposable** clone that vanishes on its own — ideal for tests:
+
+```sh
+doze ephemeral app -- pytest        # real Postgres, isolated, deleted afterward
+```
+
+## Tuning & tips
+
+- **Dev tuning** — fast, not crash-safe (perfect for tests):
+  ```hcl
+  postgres "app" {
+    version         = 16
+    shared_buffers  = "16MB"
+    max_connections = 50
+    fsync           = false
+    autovacuum      = false
+  }
+  ```
+- **Idle reaping** is by connection count — a pool holding idle connections keeps
+  the backend alive; close them (or `doze down app`) to let it sleep.
+- **Pin versions** for the team: `version = "16.14"` (exact) or `version = 16`
+  (newest, pinned in `doze.lock`). Run `doze versions postgres` to see options.
+- **TLS** for `sslmode=require` clients: see the
+  [TLS reference](../reference/configuration.md#tls).
+- **Ephemeral cold boots are instant** — doze runs `initdb` once into a template
+  and clones it copy-on-write.

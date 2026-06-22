@@ -189,6 +189,8 @@ idle**. From here:
 
 - **[Core concepts](concepts.md)** — how lazy boot, reaping, convergence, and the
   proxy actually work.
+- **[Files & storage](files-and-storage.md)** — where doze keeps everything, what
+  to commit, and how to split your config across files.
 - **[Recipes](../recipes/README.md)** — roles & grants, FIFO queues, SNS fanout,
-  CI, multi-file config, and much more.
+  CI, and much more.
 - **[Configuration reference](../reference/configuration.md)** — every field.
