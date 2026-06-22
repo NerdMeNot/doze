@@ -337,12 +337,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // in the sidebar selects that instance.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	const headerRows = 2 // title + rule above the body
-	if m.copyMode { // only scroll the frozen logs; ignore selection changes
+	if m.copyMode { // scroll the frozen logs; drag to extend the selection
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			m.logVP.LineUp(2)
 		case tea.MouseButtonWheelDown:
 			m.logVP.LineDown(2)
+		case tea.MouseButtonLeft:
+			switch msg.Action {
+			case tea.MouseActionPress: // start a fresh drag here
+				m.copyAnchor = m.logLineAt(msg.Y)
+				m.copyCursor = m.copyAnchor
+				m.refreshCopyView()
+			case tea.MouseActionMotion: // drag → extend
+				m.copyCursor = m.logLineAt(msg.Y)
+				m.refreshCopyView()
+			case tea.MouseActionRelease: // dragged across ≥2 lines → copy
+				if m.copyAnchor >= 0 && m.copyCursor != m.copyAnchor {
+					return m.copySelection()
+				}
+			}
 		}
 		return m, nil
 	}
@@ -371,12 +385,53 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.MouseButtonLeft:
-		if msg.Action == tea.MouseActionPress && overSidebar {
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		if overSidebar {
 			if row := msg.Y - headerRows; row >= 0 && row < len(m.visible()) {
 				m.cursor = row
 				return m, m.onSelect()
 			}
+		} else if m.logsRegion(msg.Y) && len(m.logLines) > 0 {
+			// Begin a drag-selection in the logs.
+			m.copyMode = true
+			m.copyLines = m.logLines
+			m.copyAnchor = m.logLineAt(msg.Y)
+			m.copyCursor = m.copyAnchor
+			m.refreshCopyView()
 		}
+	}
+	return m, nil
+}
+
+// logsTop is the screen row of the first visible log line (header + detail box +
+// the logs box's top border/title/rule).
+func (m model) logsTop() int { return 2 + (detailH + 2) + 3 }
+
+// logsRegion reports whether screen row y falls inside the log viewport.
+func (m model) logsRegion(y int) bool {
+	return y >= m.logsTop() && y < m.logsTop()+m.logVP.Height
+}
+
+// logLineAt maps a screen row to a log line index (clamped).
+func (m model) logLineAt(y int) int {
+	return clampi(m.logVP.YOffset+(y-m.logsTop()), 0, max(0, len(m.copyLines)-1))
+}
+
+// copySelection writes the selected lines to the clipboard and leaves copy mode.
+func (m model) copySelection() (tea.Model, tea.Cmd) {
+	lo, hi := m.copyRange()
+	err := clipboard.WriteAll(strings.Join(m.copyLines[lo:hi+1], "\n"))
+	m.copyMode, m.copyAnchor = false, -1
+	m.logVP.SetContent(renderLogs(m.logLines))
+	if m.follow {
+		m.logVP.GotoBottom()
+	}
+	if err != nil {
+		m.setFlash(stErr.Render("✗ copy failed: " + err.Error()))
+	} else {
+		m.setFlash(stGreen.Render(fmt.Sprintf("✓ copied %d line(s) to clipboard", hi-lo+1)))
 	}
 	return m, nil
 }
@@ -504,16 +559,7 @@ func (m model) handleCopyKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "a": // select all
 		m.copyAnchor, m.copyCursor = 0, last
 	case "c", "y", "enter":
-		lo, hi := m.copyRange()
-		text := strings.Join(m.copyLines[lo:hi+1], "\n")
-		err := clipboard.WriteAll(text)
-		exit()
-		if err != nil {
-			m.setFlash(stErr.Render("✗ copy failed: " + err.Error()))
-		} else {
-			m.setFlash(stGreen.Render(fmt.Sprintf("✓ copied %d line(s) to clipboard", hi-lo+1)))
-		}
-		return m, nil
+		return m.copySelection()
 	default:
 		return m, nil
 	}
@@ -554,7 +600,15 @@ func (m *model) refreshCopyView() {
 		b.WriteByte('\n')
 	}
 	m.logVP.SetContent(strings.TrimRight(b.String(), "\n"))
-	m.logVP.SetYOffset(max(0, m.copyCursor-m.logVP.Height/2))
+	// Keep the cursor in view without re-centering on every move (so dragging
+	// and arrow-stepping stay smooth); only scroll when it leaves the window.
+	off, h := m.logVP.YOffset, m.logVP.Height
+	if m.copyCursor < off {
+		off = m.copyCursor
+	} else if m.copyCursor >= off+h {
+		off = m.copyCursor - h + 1
+	}
+	m.logVP.SetYOffset(max(0, off))
 }
 
 // onSelect refetches logs immediately when the selection moves.
