@@ -1,14 +1,17 @@
-// Package tui is the Charm Bubble Tea dashboard: a live control room over the
-// daemon's control socket. It reflects real backend state and lets you act on a
-// selected instance — boot, reap, restart, and tail its logs — without leaving
-// the terminal.
+// Package tui is doze's live control room: an mprocs-style split view with an
+// instance sidebar on the left and, on the right, the selected instance's
+// telemetry (state, RAM/connection sparklines, a reap countdown) above its
+// streaming logs. It refreshes continuously so the picture is always live.
 package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -16,36 +19,121 @@ import (
 	"github.com/nerdmenot/doze/internal/ui"
 )
 
+// ── palette ───────────────────────────────────────────────────────────────
+// An "observatory" theme: a calm slate base with a violet accent and sharp
+// state colors. Engines that sleep should feel restful, not alarming.
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4"))
-	dimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
-	headStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#888888"))
-	selStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4"))
-	goodStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#43BF6D"))
-	badStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("#E06C75"))
+	cAccent = lipgloss.Color("#A78BFA") // violet — selection, title, RAM
+	cText   = lipgloss.Color("#C8CCD4")
+	cDim    = lipgloss.Color("#6B7280")
+	cFaint  = lipgloss.Color("#3B414D")
+	cPanel  = lipgloss.Color("#2A2F3A") // borders
+	cSel    = lipgloss.Color("#232734") // selected row fill
+	cGreen  = lipgloss.Color("#6BCB77") // active
+	cGold   = lipgloss.Color("#E0A82E") // idle
+	cCyan   = lipgloss.Color("#56B6C2") // booting / conns
+	cRed    = lipgloss.Color("#E06C75") // error
+
+	stTitle  = lipgloss.NewStyle().Bold(true).Foreground(cAccent)
+	stDim    = lipgloss.NewStyle().Foreground(cDim)
+	stFaint  = lipgloss.NewStyle().Foreground(cFaint)
+	stText   = lipgloss.NewStyle().Foreground(cText)
+	stLabel  = lipgloss.NewStyle().Foreground(cDim)
+	stErr    = lipgloss.NewStyle().Foreground(cRed)
+	stAccent = lipgloss.NewStyle().Foreground(cAccent)
+	stGreen  = lipgloss.NewStyle().Foreground(cGreen)
 )
 
-type viewMode int
+func stateColor(state string) lipgloss.Color {
+	switch state {
+	case "active":
+		return cGreen
+	case "idle":
+		return cGold
+	case "booting":
+		return cCyan
+	case "error":
+		return cRed
+	default:
+		return cDim
+	}
+}
 
 const (
-	modeList viewMode = iota
-	modeLogs
+	histLen   = 48
+	detailH   = 11
+	refreshMS = 500 * time.Millisecond
+	logsMS    = 400 * time.Millisecond
+	spinMS    = 110 * time.Millisecond
 )
 
+var spinner = []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+
+// history holds rolling samples for an instance's sparklines.
+type history struct {
+	ram   []float64
+	conns []float64
+}
+
+func (h *history) push(ram, conns float64) {
+	h.ram = pushCap(h.ram, ram)
+	h.conns = pushCap(h.conns, conns)
+}
+
+func pushCap(s []float64, v float64) []float64 {
+	s = append(s, v)
+	if len(s) > histLen {
+		s = s[len(s)-histLen:]
+	}
+	return s
+}
+
+// ── messages ──────────────────────────────────────────────────────────────
 type (
-	tickMsg   time.Time
-	statusMsg control.Response
-	logsMsg   struct {
+	tickMsg     time.Time
+	logsTickMsg time.Time
+	spinMsg     time.Time
+	statusMsg   struct {
+		resp control.Response
+		err  error
+	}
+	logsMsg struct {
 		name  string
 		lines []string
+		err   error
 	}
 	actionMsg struct {
 		verb, name string
 		err        error
 	}
-	errMsg struct{ err error }
 )
 
+func tick() tea.Cmd     { return tea.Tick(refreshMS, func(t time.Time) tea.Msg { return tickMsg(t) }) }
+func logsTick() tea.Cmd { return tea.Tick(logsMS, func(t time.Time) tea.Msg { return logsTickMsg(t) }) }
+func spin() tea.Cmd     { return tea.Tick(spinMS, func(t time.Time) tea.Msg { return spinMsg(t) }) }
+
+func refresh(c *control.Client) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := c.Do(control.Request{Op: "status"})
+		return statusMsg{resp: resp, err: err}
+	}
+}
+
+func fetchLogs(c *control.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := c.Do(control.Request{Op: "logs", DB: name})
+		return logsMsg{name: name, lines: resp.Lines, err: err}
+	}
+}
+
+func do(c *control.Client, verb, name string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := c.Do(control.Request{Op: verb, DB: name})
+		return actionMsg{verb: verb, name: name, err: err}
+	}
+}
+
+// ── model ─────────────────────────────────────────────────────────────────
 type model struct {
 	client *control.Client
 	resp   control.Response
@@ -53,266 +141,585 @@ type model struct {
 	width  int
 	height int
 
-	cursor int
-	mode   viewMode
-	logs   []string
-	logName string
-	logOff  int
-	flash   string
+	cursor  int
+	follow  bool
+	logVP   viewport.Model
+	logErr  string
+
+	filtering bool
+	filter    textinput.Model
+
+	hist  map[string]*history
+	frame int
+	flash string
 }
 
-// Run launches the dashboard against the control socket at path.
+// Run validates a daemon is up and launches the dashboard.
 func Run(socketPath string) error {
-	client := control.NewClient(socketPath)
-	if !client.Available() {
-		return fmt.Errorf("daemon is not running; start it with `doze start`")
+	c := control.NewClient(socketPath)
+	if !c.Available() {
+		return fmt.Errorf("no daemon is running (start one with `doze start`)")
 	}
-	m := model{client: client, width: 100, height: 24}
+	fi := textinput.New()
+	fi.Prompt = "/"
+	fi.Placeholder = "filter"
+	fi.CharLimit = 32
+	m := model{
+		client: c,
+		follow: true,
+		filter: fi,
+		hist:   map[string]*history{},
+		logVP:  viewport.New(0, 0),
+	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
 
-func (m model) Init() tea.Cmd { return tea.Batch(refresh(m.client), tick()) }
-
-func tick() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+func (m model) Init() tea.Cmd {
+	return tea.Batch(refresh(m.client), tick(), logsTick(), spin())
 }
 
-func refresh(c *control.Client) tea.Cmd {
-	return func() tea.Msg {
-		resp, err := c.Do(control.Request{Op: "status"})
-		if err != nil {
-			return errMsg{err}
+func (m model) bodyH() int {
+	if h := m.height - 3; h > 4 { // header (2) + footer (1)
+		return h
+	}
+	return 4
+}
+
+func (m model) sidebarW() int {
+	sw := 32
+	if m.width < 96 {
+		sw = 26
+	}
+	if sw > m.width/2 {
+		sw = m.width / 2
+	}
+	if sw < 12 {
+		sw = 12
+	}
+	return sw
+}
+
+func (m model) rightW() int {
+	if w := m.width - m.sidebarW() - 1; w > 12 {
+		return w
+	}
+	return 12
+}
+
+// visible returns instance indices in display order (name-sorted, filtered).
+func (m model) visible() []int {
+	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	idx := make([]int, 0, len(m.resp.Instances))
+	for i, in := range m.resp.Instances {
+		if q != "" && !strings.Contains(strings.ToLower(in.Name+" "+in.Engine), q) {
+			continue
 		}
-		return statusMsg(resp)
+		idx = append(idx, i)
 	}
-}
-
-func action(c *control.Client, verb, name string) tea.Cmd {
-	return func() tea.Msg {
-		_, err := c.Do(control.Request{Op: verb, DB: name})
-		return actionMsg{verb: verb, name: name, err: err}
-	}
-}
-
-func fetchLogs(c *control.Client, name string) tea.Cmd {
-	return func() tea.Msg {
-		resp, err := c.Do(control.Request{Op: "logs", DB: name})
-		if err != nil {
-			return errMsg{err}
-		}
-		return logsMsg{name: name, lines: resp.Lines}
-	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		return m.resp.Instances[idx[a]].Name < m.resp.Instances[idx[b]].Name
+	})
+	return idx
 }
 
 func (m model) selected() (control.InstanceView, bool) {
-	if m.cursor >= 0 && m.cursor < len(m.resp.Instances) {
-		return m.resp.Instances[m.cursor], true
+	vis := m.visible()
+	if len(vis) == 0 || m.cursor < 0 || m.cursor >= len(vis) {
+		return control.InstanceView{}, false
 	}
-	return control.InstanceView{}, false
+	return m.resp.Instances[vis[m.cursor]], true
+}
+
+func (m *model) layout() {
+	m.logVP.Width = max(4, m.rightW()-4)
+	m.logVP.Height = max(3, m.bodyH()-detailH-6)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.layout()
+		return m, nil
+
 	case tickMsg:
-		if m.mode == modeList {
-			return m, tea.Batch(refresh(m.client), tick())
+		return m, tea.Batch(refresh(m.client), tick())
+
+	case spinMsg:
+		m.frame++
+		return m, spin()
+
+	case logsTickMsg:
+		var cmd tea.Cmd
+		if v, ok := m.selected(); ok && v.PID != 0 {
+			cmd = fetchLogs(m.client, v.Name)
 		}
-		return m, tick()
+		return m, tea.Batch(cmd, logsTick())
+
 	case statusMsg:
-		m.resp, m.err = control.Response(msg), nil
-		if m.cursor >= len(m.resp.Instances) {
-			m.cursor = max(0, len(m.resp.Instances)-1)
+		m.err = msg.err
+		if msg.err == nil {
+			m.resp = msg.resp
+			for _, in := range m.resp.Instances {
+				h := m.hist[in.Name]
+				if h == nil {
+					h = &history{}
+					m.hist[in.Name] = h
+				}
+				h.push(float64(in.RAM), float64(in.Conns))
+			}
 		}
+		if vis := m.visible(); m.cursor >= len(vis) {
+			m.cursor = max(0, len(vis)-1)
+		}
+		return m, nil
+
 	case logsMsg:
-		m.mode, m.logName, m.logs, m.logOff = modeLogs, msg.name, msg.lines, 0
+		if v, ok := m.selected(); ok && msg.name == v.Name {
+			if msg.err != nil {
+				m.logErr = msg.err.Error()
+				m.logVP.SetContent("")
+			} else {
+				m.logErr = ""
+				m.logVP.SetContent(renderLogs(msg.lines))
+				if m.follow {
+					m.logVP.GotoBottom()
+				}
+			}
+		}
+		return m, nil
+
 	case actionMsg:
 		if msg.err != nil {
-			m.flash = badStyle.Render("✗ " + msg.verb + " " + msg.name + ": " + msg.err.Error())
+			m.flash = stErr.Render("✗ " + msg.verb + " " + msg.name + ": " + msg.err.Error())
 		} else {
-			m.flash = goodStyle.Render("✓ " + msg.verb + " " + msg.name)
+			m.flash = stGreen.Render("✓ " + msg.verb + " " + msg.name)
 		}
 		return m, refresh(m.client)
-	case errMsg:
-		m.err = msg.err
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
-	return m, nil
+
+	var cmd tea.Cmd
+	m.logVP, cmd = m.logVP.Update(msg)
+	return m, cmd
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.mode == modeLogs {
+	if m.filtering {
 		switch msg.String() {
-		case "q", "esc", "ctrl+c":
-			m.mode = modeList
-		case "up", "k":
-			m.logOff = max(0, m.logOff-1)
-		case "down", "j":
-			m.logOff++
+		case "enter", "esc":
+			m.filtering = false
+			m.filter.Blur()
+			if msg.String() == "esc" {
+				m.filter.SetValue("")
+			}
+			m.cursor = 0
+			return m, nil
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m.filter, cmd = m.filter.Update(msg)
+		m.cursor = 0
+		return m, cmd
 	}
+
+	vis := m.visible()
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
-		m.cursor = max(0, m.cursor-1)
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return m, m.onSelect()
 	case "down", "j":
-		m.cursor = min(len(m.resp.Instances)-1, m.cursor+1)
+		if m.cursor < len(vis)-1 {
+			m.cursor++
+		}
+		return m, m.onSelect()
+	case "g", "home":
+		m.cursor = 0
+		return m, m.onSelect()
+	case "G", "end":
+		m.cursor = max(0, len(vis)-1)
+		return m, m.onSelect()
+	case "/":
+		m.filtering = true
+		m.filter.Focus()
+		return m, textinput.Blink
+	case "f":
+		m.follow = !m.follow
+		if m.follow {
+			m.logVP.GotoBottom()
+		}
+		return m, nil
+	case "pgup", "ctrl+u":
+		m.follow = false
+		m.logVP.HalfViewUp()
+		return m, nil
+	case "pgdown", "ctrl+d":
+		m.logVP.HalfViewDown()
+		return m, nil
 	case "r":
 		return m, refresh(m.client)
-	case "b", "enter":
-		if v, ok := m.selected(); ok {
-			m.flash = dimStyle.Render("booting " + v.Name + "…")
-			return m, action(m.client, "boot", v.Name)
-		}
-	case "d":
-		if v, ok := m.selected(); ok {
-			m.flash = dimStyle.Render("reaping " + v.Name + "…")
-			return m, action(m.client, "down", v.Name)
-		}
-	case "R":
-		if v, ok := m.selected(); ok {
-			m.flash = dimStyle.Render("restarting " + v.Name + "…")
-			return m, action(m.client, "restart", v.Name)
-		}
-	case "l":
-		if v, ok := m.selected(); ok {
-			return m, fetchLogs(m.client, v.Name)
+	}
+
+	if v, ok := m.selected(); ok {
+		switch msg.String() {
+		case "enter", "b":
+			m.flash = stDim.Render("booting " + v.Name + "…")
+			return m, do(m.client, "boot", v.Name)
+		case "d":
+			m.flash = stDim.Render("reaping " + v.Name + "…")
+			return m, do(m.client, "down", v.Name)
+		case "R":
+			m.flash = stDim.Render("restarting " + v.Name + "…")
+			return m, do(m.client, "restart", v.Name)
 		}
 	}
 	return m, nil
 }
 
+// onSelect refetches logs immediately when the selection moves.
+func (m *model) onSelect() tea.Cmd {
+	m.logVP.SetContent("")
+	m.logErr = ""
+	if v, ok := m.selected(); ok && v.PID != 0 {
+		return fetchLogs(m.client, v.Name)
+	}
+	return nil
+}
+
 func (m model) View() string {
-	if m.mode == modeLogs {
-		return m.logsView()
+	if m.width == 0 {
+		mm := m
+		mm.width, mm.height = 110, 32
+		mm.layout()
+		return mm.render()
 	}
-	return m.listView()
+	return m.render()
 }
 
-func (m model) listView() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("doze") + dimStyle.Render(" — weightless local backing services") + "\n")
-	if m.resp.Listen != "" {
-		b.WriteString(dimStyle.Render("daemon listening on "+m.resp.Listen) + "\n")
+func (m model) render() string {
+	body := lipgloss.JoinHorizontal(lipgloss.Top, m.viewSidebar(), " ", m.viewRight())
+	return lipgloss.JoinVertical(lipgloss.Left, m.viewHeader(), body, m.viewFooter())
+}
+
+// ── header ────────────────────────────────────────────────────────────────
+func (m model) viewHeader() string {
+	live := stGreen
+	if m.frame%2 == 0 {
+		live = live.Faint(true)
 	}
-	b.WriteString("\n")
-	if m.err != nil {
-		b.WriteString(badStyle.Render("⚠ "+m.err.Error()) + "\n\n")
+	var up int
+	var total int64
+	for _, in := range m.resp.Instances {
+		if in.PID != 0 {
+			up++
+			total += in.RAM
+		}
+	}
+	left := stTitle.Render("◆ doze") + "  " + stFaint.Render("mission control")
+	listen := m.resp.Listen
+	if listen == "" {
+		listen = "—"
+	}
+	right := strings.Join([]string{
+		stDim.Render(listen),
+		stText.Render(fmt.Sprintf("%d up", up)) + stDim.Render("/"+fmt.Sprint(len(m.resp.Instances))),
+		stAccent.Render(orDash(ui.HumanBytes(total))) + stDim.Render(" rss"),
+		live.Render("●") + stDim.Render(" live"),
+	}, stFaint.Render("  ·  "))
+	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
+	line := left + strings.Repeat(" ", gap) + right
+	rule := stFaint.Render(strings.Repeat("─", max(1, m.width)))
+	return line + "\n" + rule
+}
+
+// ── sidebar ───────────────────────────────────────────────────────────────
+func (m model) viewSidebar() string {
+	w := m.sidebarW()
+	var rows []string
+	for di, i := range m.visible() {
+		rows = append(rows, m.sidebarRow(m.resp.Instances[i], di == m.cursor, w))
+	}
+	if len(rows) == 0 {
+		rows = append(rows, stDim.Render("  (no instances)"))
+	}
+	bodyH := m.bodyH()
+	for len(rows) < bodyH {
+		rows = append(rows, "")
+	}
+	return lipgloss.NewStyle().Width(w).Render(strings.Join(rows[:bodyH], "\n"))
+}
+
+func (m model) sidebarRow(in control.InstanceView, selected bool, w int) string {
+	nameStyle := stText
+	if selected {
+		nameStyle = stAccent.Bold(true)
+	}
+	spark := ""
+	if h := m.hist[in.Name]; h != nil && in.PID != 0 {
+		spark = lipgloss.NewStyle().Foreground(stateColor(displayState(in))).Render(sparkline(h.ram, 6))
+	} else {
+		spark = stFaint.Render(strings.Repeat("·", 6))
+	}
+	ram := stFaint.Render("    ·")
+	if in.RAM > 0 {
+		ram = stDim.Render(fmt.Sprintf("%5s", ui.HumanBytes(in.RAM)))
+	}
+	left := m.glyph(in) + " " + nameStyle.Render(truncate(in.Name, w-17))
+	right := ram + " " + spark
+	gap := max(1, w-lipgloss.Width(left)-lipgloss.Width(right)-2)
+	inner := left + strings.Repeat(" ", gap) + right
+	if selected {
+		bar := stAccent.Render("▌")
+		return lipgloss.NewStyle().Background(cSel).Width(w).Render(bar + " " + inner)
+	}
+	return lipgloss.NewStyle().Width(w).Render("  " + inner)
+}
+
+func (m model) glyph(in control.InstanceView) string {
+	st := displayState(in)
+	s := lipgloss.NewStyle().Foreground(stateColor(st))
+	switch st {
+	case "booting":
+		return s.Render(string(spinner[m.frame%len(spinner)]))
+	case "active":
+		if m.frame%2 == 0 {
+			return s.Render("●")
+		}
+		return s.Faint(true).Render("●")
+	case "idle":
+		return s.Render("○")
+	case "error":
+		return s.Render("✕")
+	default:
+		return stFaint.Render("·")
+	}
+}
+
+// ── right pane ────────────────────────────────────────────────────────────
+func (m model) viewRight() string {
+	w := m.rightW()
+	v, ok := m.selected()
+	if !ok {
+		return lipgloss.NewStyle().Width(w).Height(m.bodyH()).
+			Align(lipgloss.Center, lipgloss.Center).Foreground(cDim).
+			Render("nothing selected")
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, m.viewDetail(v, w), m.viewLogs(v, w))
+}
+
+func (m model) viewDetail(v control.InstanceView, w int) string {
+	st := displayState(v)
+	title := stTitle.Render(v.Name) + stDim.Render("  "+v.Engine)
+	if v.Version != "" {
+		title += stDim.Render(" " + v.Version)
+	}
+	badge := lipgloss.NewStyle().Foreground(stateColor(st)).Bold(true).Render(strings.ToUpper(st))
+
+	vit := func(label, val string) string { return stLabel.Render(label) + " " + stText.Render(orDash(val)) }
+	row1 := strings.Join([]string{
+		stLabel.Render("state") + " " + badge,
+		vit("conns", fmt.Sprint(v.Conns)),
+		vit("pid", pidStr(v.PID)),
+		vit("up", ui.Uptime(v.StartedAt)),
+	}, stFaint.Render("   "))
+	row2 := stLabel.Render("endpoint ") + stText.Render(orDash(v.Endpoint))
+	urlLine := stLabel.Render(orEnv(v.EnvVar)+" ") + stAccent.Render(truncate(orDash(v.URL), w-len(orEnv(v.EnvVar))-7))
+
+	h := m.hist[v.Name]
+	sw := min(28, w-22)
+	ramSpark, connSpark := stFaint.Render(strings.Repeat("·", max(0, sw))), stFaint.Render(strings.Repeat("·", max(0, sw)))
+	if h != nil {
+		ramSpark = lipgloss.NewStyle().Foreground(cAccent).Render(sparkline(h.ram, sw))
+		connSpark = lipgloss.NewStyle().Foreground(cCyan).Render(sparkline(h.conns, sw))
+	}
+	ramLine := stLabel.Render("ram  ") + ramSpark + "  " + stText.Render(orDash(ui.HumanBytes(v.RAM)))
+	connLine := stLabel.Render("conn ") + connSpark + "  " + stText.Render(fmt.Sprint(v.Conns))
+
+	var status string
+	switch {
+	case v.LastError != "":
+		status = stErr.Render("✕ " + truncate(v.LastError, w-6))
+	case st == "idle" && !v.IdleSince.IsZero() && m.resp.IdleTimeout > 0:
+		status = m.reapGauge(v, w-4)
+	case st == "active":
+		status = stGreen.Render("● serving " + fmt.Sprint(v.Conns) + " connection(s)")
+	case st == "booting":
+		status = lipgloss.NewStyle().Foreground(cCyan).Render(string(spinner[m.frame%len(spinner)]) + " booting…")
+	default:
+		status = stDim.Render("· asleep — connect to wake it")
 	}
 
-	cols := []col{
-		{"", 2}, {"NAME", 18}, {"ENGINE", 9}, {"STATE", 8}, {"CONNS", 6},
-		{"RAM", 7}, {"UPTIME", 7}, {"ENDPOINT", 22}, {"PID", 7},
-	}
-	b.WriteString(headerLine(cols) + "\n")
-	if len(m.resp.Instances) == 0 {
-		b.WriteString(dimStyle.Render("  no instances declared") + "\n")
-	}
-	for i, inst := range m.resp.Instances {
-		marker, name := "  ", inst.Name
-		if i == m.cursor {
-			marker = selStyle.Render("❯ ")
-			name = selStyle.Render(truncate(inst.Name, 18))
-		} else {
-			name = truncate(inst.Name, 18)
-		}
-		ram, pid := "", ""
-		if inst.PID != 0 {
-			ram, pid = ui.HumanRAM(inst.PID), fmt.Sprintf("%d", inst.PID)
-		}
-		state := inst.State
-		if inst.LastError != "" && (inst.State == "reaped" || inst.State == "") {
-			state = "error"
-		}
-		cells := []string{
-			marker, name, truncate(inst.Engine, 9), ui.State(state),
-			fmt.Sprintf("%d", inst.Conns), ram, ui.Uptime(inst.StartedAt),
-			truncate(inst.Endpoint, 22), pid,
-		}
-		b.WriteString(dataLine(cells, cols) + "\n")
-	}
+	card := strings.Join([]string{
+		title,
+		stFaint.Render(strings.Repeat("╌", max(1, w-4))),
+		row1, row2, urlLine, "",
+		ramLine, connLine, "",
+		status,
+	}, "\n")
+	return lipgloss.NewStyle().Width(w).Height(detailH).
+		Border(lipgloss.RoundedBorder()).BorderForeground(cPanel).
+		Padding(0, 1).Render(card)
+}
 
-	if v, ok := m.selected(); ok && v.LastError != "" {
-		b.WriteString("\n" + badStyle.Render("✗ "+v.Name+": "+v.LastError) + "\n")
+func (m model) reapGauge(v control.InstanceView, w int) string {
+	remain := m.resp.IdleTimeout - time.Since(v.IdleSince)
+	if remain < 0 {
+		remain = 0
 	}
-	b.WriteString("\n")
+	frac := float64(remain) / float64(m.resp.IdleTimeout)
+	barW := max(6, w-22)
+	filled := int(frac*float64(barW) + 0.5)
+	if filled > barW {
+		filled = barW
+	}
+	bar := lipgloss.NewStyle().Foreground(cGold).Render(strings.Repeat("█", filled)) +
+		stFaint.Render(strings.Repeat("░", barW-filled))
+	return stLabel.Render("sleeps in ") + bar + "  " + stDim.Render(compactDur(remain))
+}
+
+func (m model) viewLogs(v control.InstanceView, w int) string {
+	mode := stDim.Render("paused")
+	if m.follow {
+		mode = stGreen.Render("following")
+	}
+	title := stLabel.Render("logs ") + stFaint.Render("· "+v.Name)
+	gap := max(1, w-4-lipgloss.Width(title)-lipgloss.Width(mode))
+	head := title + strings.Repeat(" ", gap) + mode
+
+	var bodyTxt string
+	switch {
+	case v.PID == 0:
+		bodyTxt = stFaint.Render("(asleep — no live log stream)") + strings.Repeat("\n", max(0, m.logVP.Height-1))
+	case m.logErr != "":
+		bodyTxt = stDim.Render(m.logErr) + strings.Repeat("\n", max(0, m.logVP.Height-1))
+	default:
+		bodyTxt = m.logVP.View()
+	}
+	inner := head + "\n" + stFaint.Render(strings.Repeat("╌", max(1, w-4))) + "\n" + bodyTxt
+	return lipgloss.NewStyle().Width(w).
+		Border(lipgloss.RoundedBorder()).BorderForeground(cPanel).
+		Padding(0, 1).Render(inner)
+}
+
+// ── footer ────────────────────────────────────────────────────────────────
+func (m model) viewFooter() string {
+	if m.filtering {
+		return stAccent.Render(m.filter.View())
+	}
 	if m.flash != "" {
-		b.WriteString(m.flash + "\n")
+		return m.flash
 	}
-	b.WriteString(dimStyle.Render("↑/↓ select · b boot · d reap · R restart · l logs · r refresh · q quit"))
-	return b.String()
+	key := func(k, label string) string { return stAccent.Render(k) + stDim.Render(" "+label) }
+	return strings.Join([]string{
+		key("↑↓", "select"), key("b", "boot"), key("d", "reap"), key("R", "restart"),
+		key("f", "follow"), key("/", "filter"), key("r", "refresh"), key("q", "quit"),
+	}, stFaint.Render("  ·  "))
 }
 
-func (m model) logsView() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("logs") + dimStyle.Render(" — "+m.logName) + "\n\n")
-	body := m.logs
-	if len(body) == 0 {
-		body = []string{dimStyle.Render("(no log output; the backend may be reaped)")}
+// ── helpers ───────────────────────────────────────────────────────────────
+
+// displayState promotes a reaped instance carrying an error to "error".
+func displayState(in control.InstanceView) string {
+	if in.LastError != "" && (in.State == "reaped" || in.State == "") {
+		return "error"
 	}
-	// Window the lines to the available height.
-	visible := m.height - 5
-	if visible < 1 {
-		visible = 1
+	if in.State == "" {
+		return "reaped"
 	}
-	start := 0
-	if len(body) > visible {
-		start = len(body) - visible - m.logOff
-		start = clamp(start, 0, len(body)-visible)
-	}
-	end := min(len(body), start+visible)
-	for _, line := range body[start:end] {
-		b.WriteString(line + "\n")
-	}
-	b.WriteString("\n" + dimStyle.Render("↑/↓ scroll · esc back"))
-	return b.String()
+	return in.State
 }
 
-type col struct {
-	name string
-	w    int
-}
-
-func headerLine(cols []col) string {
-	parts := make([]string, len(cols))
-	for i, c := range cols {
-		parts[i] = headStyle.Render(c.name) + pad(c.name, c.w)
+// sparkline renders values as block runes, scaled to the window's max.
+func sparkline(vals []float64, width int) string {
+	if width <= 0 {
+		return ""
 	}
-	return strings.Join(parts, " ")
-}
-
-func dataLine(cells []string, cols []col) string {
-	parts := make([]string, len(cells))
-	for i, cell := range cells {
-		w := 0
-		if i < len(cols) {
-			w = cols[i].w
+	bl := []rune(" ▁▂▃▄▅▆▇█")
+	if len(vals) == 0 {
+		return strings.Repeat(string(bl[0]), width)
+	}
+	if len(vals) > width {
+		vals = vals[len(vals)-width:]
+	}
+	maxV := 0.0
+	for _, v := range vals {
+		if v > maxV {
+			maxV = v
 		}
-		parts[i] = cell + pad(cell, w)
 	}
-	return strings.Join(parts, " ")
+	var b strings.Builder
+	for i := 0; i < width-len(vals); i++ {
+		b.WriteRune(bl[0])
+	}
+	for _, v := range vals {
+		lvl := 0
+		if maxV > 0 {
+			lvl = int(v / maxV * float64(len(bl)-1))
+		}
+		lvl = clampi(lvl, 0, len(bl)-1)
+		b.WriteRune(bl[lvl])
+	}
+	return b.String()
 }
 
-func pad(s string, w int) string {
-	if d := w - lipgloss.Width(s); d > 0 {
-		return strings.Repeat(" ", d)
+func renderLogs(lines []string) string {
+	if len(lines) == 0 {
+		return stFaint.Render("(no output yet)")
 	}
-	return ""
+	var b strings.Builder
+	for _, ln := range lines {
+		b.WriteString(stText.Render(ln))
+		b.WriteByte('\n')
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func truncate(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
 	if lipgloss.Width(s) <= w {
 		return s
 	}
-	if w <= 1 {
-		return s[:w]
+	r := []rune(s)
+	if w <= 1 || len(r) == 0 {
+		return "…"
 	}
-	return s[:w-1] + "…"
+	if w-1 > len(r) {
+		return s
+	}
+	return string(r[:w-1]) + "…"
 }
 
-func clamp(v, lo, hi int) int { return max(lo, min(hi, v)) }
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+func orEnv(s string) string {
+	if s == "" {
+		return "url"
+	}
+	return s
+}
+func pidStr(p int) string {
+	if p == 0 {
+		return "—"
+	}
+	return fmt.Sprint(p)
+}
+func compactDur(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%ds", int(d.Seconds()))
+}
+func clampi(v, lo, hi int) int { return max(lo, min(hi, v)) }

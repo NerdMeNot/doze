@@ -17,6 +17,7 @@ import (
 	"github.com/nerdmenot/doze/internal/engine"
 	"github.com/nerdmenot/doze/internal/proxy"
 	"github.com/nerdmenot/doze/internal/runtime"
+	"github.com/nerdmenot/doze/internal/ui"
 )
 
 // ControlSocketPath returns the admin socket path for a project.
@@ -142,8 +143,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 type handler struct{ d *Daemon }
 
 func (h *handler) Status() control.Response {
-	resp := control.Response{Listen: h.d.cfg.Listen}
-	addrs := h.endpointAddrs()
+	resp := control.Response{Listen: h.d.cfg.Listen, IdleTimeout: h.d.cfg.Defaults.IdleTimeout}
+	eps := h.endpointsByName()
 	seen := map[string]bool{}
 	for _, inst := range h.d.rt.Registry().Snapshot() {
 		engineType, version, declared := "", "", false
@@ -151,30 +152,41 @@ func (h *handler) Status() control.Response {
 			engineType, version, declared = decl.Type, decl.Version.String(), true
 		}
 		v := control.ViewFromRegistry(inst, engineType, version, declared)
-		v.Endpoint = addrs[inst.Name]
+		hydrateEndpoint(&v, eps[inst.Name])
+		if inst.PID != 0 {
+			v.RAM = ui.RSSBytes(inst.PID)
+		}
 		resp.Instances = append(resp.Instances, v)
 		seen[inst.Name] = true
 	}
 	for _, decl := range h.d.cfg.Instances {
 		if !seen[decl.Name] {
-			resp.Instances = append(resp.Instances, control.InstanceView{
+			v := control.InstanceView{
 				Name: decl.Name, Engine: decl.Type, State: "reaped",
-				Version: decl.Version.String(), Endpoint: addrs[decl.Name], Declared: true,
-			})
+				Version: decl.Version.String(), Declared: true,
+			}
+			hydrateEndpoint(&v, eps[decl.Name])
+			resp.Instances = append(resp.Instances, v)
 		}
 	}
 	return resp
 }
 
-// endpointAddrs maps instance name -> client-facing address (best effort).
-func (h *handler) endpointAddrs() map[string]string {
-	out := map[string]string{}
+func hydrateEndpoint(v *control.InstanceView, ep endpoints.Endpoint) {
+	v.Endpoint = ep.Address
+	v.URL = ep.URL
+	v.EnvVar = ep.EnvVar
+}
+
+// endpointsByName maps instance name -> its resolved endpoint (best effort).
+func (h *handler) endpointsByName() map[string]endpoints.Endpoint {
+	out := map[string]endpoints.Endpoint{}
 	eps, err := endpoints.For(h.d.cfg)
 	if err != nil {
 		return out
 	}
 	for _, ep := range eps {
-		out[ep.Name] = ep.Address
+		out[ep.Name] = ep
 	}
 	return out
 }

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nerdmenot/doze/internal/control"
@@ -17,8 +19,14 @@ func key(s string) tea.KeyMsg {
 }
 
 func threeInstances() model {
+	fi := textinput.New()
+	fi.Prompt = "/"
 	return model{
-		width: 100, height: 24,
+		width: 110, height: 30,
+		follow: true,
+		filter: fi,
+		hist:   map[string]*history{},
+		logVP:  viewport.New(40, 8),
 		resp: control.Response{
 			Listen: "127.0.0.1:6432",
 			Instances: []control.InstanceView{
@@ -49,20 +57,41 @@ func TestCursorNavigationClamps(t *testing.T) {
 	}
 }
 
-func TestLogsModeReturnsOnEsc(t *testing.T) {
+func TestSelectionIsNameSorted(t *testing.T) {
 	m := threeInstances()
-	m.mode = modeLogs
-	m.logs = []string{"line1", "line2"}
-	m = send(m, key("esc"))
-	if m.mode != modeList {
-		t.Fatal("esc in logs mode should return to the list")
+	// cursor 0 should be the alphabetically-first instance regardless of input order.
+	if v, _ := m.selected(); v.Name != "app" {
+		t.Fatalf("first selection = %q, want app", v.Name)
+	}
+	m.cursor = 2
+	if v, _ := m.selected(); v.Name != "media" {
+		t.Fatalf("last selection = %q, want media", v.Name)
 	}
 }
 
-func TestViewRendersStateAndKeys(t *testing.T) {
+func TestFilterToggleAndClear(t *testing.T) {
+	m := threeInstances()
+	m = send(m, key("/"))
+	if !m.filtering {
+		t.Fatal("'/' should enter filter mode")
+	}
+	m = send(m, key("z")) // matches nothing
+	if len(m.visible()) != 0 {
+		t.Fatalf("filter 'z' should hide all, got %d", len(m.visible()))
+	}
+	m = send(m, key("esc"))
+	if m.filtering {
+		t.Fatal("esc should leave filter mode")
+	}
+	if len(m.visible()) != 3 {
+		t.Fatalf("esc should clear the filter, got %d visible", len(m.visible()))
+	}
+}
+
+func TestViewRendersInstancesAndKeys(t *testing.T) {
 	m := threeInstances()
 	out := m.View()
-	for _, want := range []string{"app", "cache", "media", "boot", "reap", "restart"} {
+	for _, want := range []string{"app", "cache", "media", "boot", "reap", "restart", "doze"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("view missing %q:\n%s", want, out)
 		}

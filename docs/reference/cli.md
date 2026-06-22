@@ -59,8 +59,12 @@ that failed to boot shows state `error` with the reason. Output is plain when
 piped (safe for scripts).
 
 ### `doze dash`
-Launch the live, interactive TUI. Select a row with `↑/↓`, then:
-`b` boot · `d` reap · `R` restart · `l` view logs · `r` refresh · `q` quit.
+Launch the live, interactive TUI — a split "mission control": an instance
+sidebar on the left, and on the right the selected instance's telemetry (state,
+RAM/connection sparklines, a reap countdown) above its **streaming logs**. It
+refreshes continuously. Select a row with `↑/↓`, then:
+`b` boot · `d` reap · `R` restart · `f` toggle log-follow · `/` filter ·
+`r` refresh · `q` quit.
 
 ### `doze logs [instance] [-f]`
 With no argument, tail the daemon's log. With an instance, show that backend's

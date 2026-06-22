@@ -30,18 +30,23 @@ type InstanceView struct {
 	PID       int       `json:"pid"`
 	Conns     int       `json:"conns"`
 	StartedAt time.Time `json:"started_at"`
+	IdleSince time.Time `json:"idle_since,omitempty"` // when Conns hit 0; drives the reap countdown
+	RAM       int64     `json:"ram,omitempty"`        // resident bytes of the backend, 0 when reaped
 	Endpoint  string    `json:"endpoint,omitempty"`   // client-facing address
+	URL       string    `json:"url,omitempty"`        // full connection string
+	EnvVar    string    `json:"env_var,omitempty"`    // conventional env var (DATABASE_URL, …)
 	LastError string    `json:"last_error,omitempty"` // most recent boot/crash failure
 	Declared  bool      `json:"declared"`
 }
 
 // Response is the daemon's reply.
 type Response struct {
-	OK        bool           `json:"ok"`
-	Error     string         `json:"error,omitempty"`
-	Listen    string         `json:"listen,omitempty"`
-	Instances []InstanceView `json:"instances,omitempty"`
-	Lines     []string       `json:"lines,omitempty"`
+	OK          bool           `json:"ok"`
+	Error       string         `json:"error,omitempty"`
+	Listen      string         `json:"listen,omitempty"`
+	IdleTimeout time.Duration  `json:"idle_timeout,omitempty"` // reap window, for the countdown
+	Instances   []InstanceView `json:"instances,omitempty"`
+	Lines       []string       `json:"lines,omitempty"`
 }
 
 // Handler implements the daemon-side operations.
@@ -149,6 +154,7 @@ func ViewFromRegistry(inst registry.Instance, engineType, version string, declar
 		PID:       inst.PID,
 		Conns:     inst.Conns,
 		StartedAt: inst.StartedAt,
+		IdleSince: inst.IdleSince,
 		LastError: inst.LastError,
 		Declared:  declared,
 	}

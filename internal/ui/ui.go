@@ -133,8 +133,13 @@ func Uptime(t time.Time) string {
 }
 
 // HumanRAM returns a human RSS string for a pid, or "" if unavailable.
-func HumanRAM(pid int) string {
-	b := rssBytes(pid)
+func HumanRAM(pid int) string { return HumanBytes(rssBytes(pid)) }
+
+// RSSBytes returns resident memory for a pid in bytes (0 if unavailable).
+func RSSBytes(pid int) int64 { return rssBytes(pid) }
+
+// HumanBytes formats a byte count as a compact K/M/G string ("" for <= 0).
+func HumanBytes(b int64) string {
 	if b <= 0 {
 		return ""
 	}
