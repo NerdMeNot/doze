@@ -6,6 +6,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -149,10 +150,14 @@ type model struct {
 	filtering bool
 	filter    textinput.Model
 
-	hist  map[string]*history
-	frame int
-	flash string
+	hist       map[string]*history
+	frame      int
+	flash      string
+	flashFrame int
 }
+
+// setFlash records a transient status message (auto-cleared after ~2.5s).
+func (m *model) setFlash(s string) { m.flash = s; m.flashFrame = m.frame }
 
 // Run validates a daemon is up and launches the dashboard.
 func Run(socketPath string) error {
@@ -201,7 +206,7 @@ func (m model) sidebarW() int {
 }
 
 func (m model) rightW() int {
-	if w := m.width - m.sidebarW() - 1; w > 12 {
+	if w := m.width - m.sidebarW() - 2; w > 12 { // sidebar border (1) + gap (1)
 		return w
 	}
 	return 12
@@ -248,6 +253,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinMsg:
 		m.frame++
+		if m.flash != "" && m.frame-m.flashFrame > 24 { // ~2.5s at 110ms
+			m.flash = ""
+		}
 		return m, spin()
 
 	case logsTickMsg:
@@ -292,9 +300,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionMsg:
 		if msg.err != nil {
-			m.flash = stErr.Render("✗ " + msg.verb + " " + msg.name + ": " + msg.err.Error())
+			m.setFlash(stErr.Render("✗ " + msg.verb + " " + msg.name + ": " + msg.err.Error()))
 		} else {
-			m.flash = stGreen.Render("✓ " + msg.verb + " " + msg.name)
+			m.setFlash(stGreen.Render("✓ " + msg.verb + " " + msg.name))
 		}
 		return m, refresh(m.client)
 
@@ -369,13 +377,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if v, ok := m.selected(); ok {
 		switch msg.String() {
 		case "enter", "b":
-			m.flash = stDim.Render("booting " + v.Name + "…")
+			m.setFlash(stDim.Render("booting " + v.Name + "…"))
 			return m, do(m.client, "boot", v.Name)
 		case "d":
-			m.flash = stDim.Render("reaping " + v.Name + "…")
+			m.setFlash(stDim.Render("reaping " + v.Name + "…"))
 			return m, do(m.client, "down", v.Name)
 		case "R":
-			m.flash = stDim.Render("restarting " + v.Name + "…")
+			m.setFlash(stDim.Render("restarting " + v.Name + "…"))
 			return m, do(m.client, "restart", v.Name)
 		}
 	}
@@ -421,7 +429,11 @@ func (m model) viewHeader() string {
 			total += in.RAM
 		}
 	}
-	left := stTitle.Render("◆ doze") + "  " + stFaint.Render("mission control")
+	sub := stFaint.Render("mission control")
+	if m.flash != "" {
+		sub = m.flash
+	}
+	left := stTitle.Render("◆ doze") + "  " + sub
 	listen := m.resp.Listen
 	if listen == "" {
 		listen = "—"
@@ -441,44 +453,94 @@ func (m model) viewHeader() string {
 // ── sidebar ───────────────────────────────────────────────────────────────
 func (m model) viewSidebar() string {
 	w := m.sidebarW()
+	bodyH := m.bodyH()
+	vis := m.visible()
+
+	var maxRAM int64 = 1
+	for _, i := range vis {
+		if r := m.resp.Instances[i].RAM; r > maxRAM {
+			maxRAM = r
+		}
+	}
 	var rows []string
-	for di, i := range m.visible() {
-		rows = append(rows, m.sidebarRow(m.resp.Instances[i], di == m.cursor, w))
+	for di, i := range vis {
+		rows = append(rows, m.sidebarRow(m.resp.Instances[i], di == m.cursor, w, maxRAM))
 	}
 	if len(rows) == 0 {
 		rows = append(rows, stDim.Render("  (no instances)"))
 	}
-	bodyH := m.bodyH()
-	for len(rows) < bodyH {
+	footer := m.sidebarTotals(w)
+	avail := max(0, bodyH-len(footer))
+	for len(rows) < avail {
 		rows = append(rows, "")
 	}
-	return lipgloss.NewStyle().Width(w).Render(strings.Join(rows[:bodyH], "\n"))
+	all := append(rows[:avail], footer...)
+	return lipgloss.NewStyle().Width(w).
+		Border(lipgloss.NormalBorder(), false, true, false, false). // right edge only
+		BorderForeground(cPanel).
+		Render(strings.Join(all, "\n"))
 }
 
-func (m model) sidebarRow(in control.InstanceView, selected bool, w int) string {
+func (m model) sidebarRow(in control.InstanceView, selected bool, w int, maxRAM int64) string {
+	st := displayState(in)
 	nameStyle := stText
 	if selected {
 		nameStyle = stAccent.Bold(true)
 	}
-	spark := ""
-	if h := m.hist[in.Name]; h != nil && in.PID != 0 {
-		spark = lipgloss.NewStyle().Foreground(stateColor(displayState(in))).Render(sparkline(h.ram, 6))
-	} else {
-		spark = stFaint.Render(strings.Repeat("·", 6))
-	}
-	ram := stFaint.Render("    ·")
+	// RAM value + a bar proportional to the heaviest instance, so relative
+	// consumption is legible at a glance without selecting anything.
+	const bw = 5
+	var ram, bar string
 	if in.RAM > 0 {
-		ram = stDim.Render(fmt.Sprintf("%5s", ui.HumanBytes(in.RAM)))
+		ram = stText.Render(fmt.Sprintf("%5s", ui.HumanBytes(in.RAM)))
+		filled := clampi(int(float64(in.RAM)/float64(maxRAM)*float64(bw)+0.5), 0, bw)
+		bar = lipgloss.NewStyle().Foreground(stateColor(st)).Render(strings.Repeat("▰", filled)) +
+			stFaint.Render(strings.Repeat("▱", bw-filled))
+	} else {
+		ram = stFaint.Render("    ·")
+		bar = stFaint.Render(strings.Repeat("▱", bw))
 	}
-	left := m.glyph(in) + " " + nameStyle.Render(truncate(in.Name, w-17))
-	right := ram + " " + spark
+	left := m.glyph(in) + " " + nameStyle.Render(truncate(in.Name, w-16))
+	right := ram + " " + bar
 	gap := max(1, w-lipgloss.Width(left)-lipgloss.Width(right)-2)
 	inner := left + strings.Repeat(" ", gap) + right
 	if selected {
-		bar := stAccent.Render("▌")
-		return lipgloss.NewStyle().Background(cSel).Width(w).Render(bar + " " + inner)
+		return lipgloss.NewStyle().Background(cSel).Width(w).Render(stAccent.Render("▌") + " " + inner)
 	}
 	return lipgloss.NewStyle().Width(w).Render("  " + inner)
+}
+
+// sidebarTotals is the at-a-glance resource summary pinned to the bottom.
+func (m model) sidebarTotals(w int) []string {
+	var act, idle, asleep, errc int
+	var total int64
+	for _, in := range m.resp.Instances {
+		switch displayState(in) {
+		case "active", "booting":
+			act++
+		case "idle":
+			idle++
+		case "error":
+			errc++
+		default:
+			asleep++
+		}
+		if in.PID != 0 {
+			total += in.RAM
+		}
+	}
+	counts := stGreen.Render(fmt.Sprintf("●%d", act)) + "  " +
+		lipgloss.NewStyle().Foreground(cGold).Render(fmt.Sprintf("○%d", idle)) + "  " +
+		stFaint.Render(fmt.Sprintf("·%d", asleep))
+	if errc > 0 {
+		counts += "  " + stErr.Render(fmt.Sprintf("✕%d", errc))
+	}
+	rss := stLabel.Render("rss ") + stAccent.Render(orDash(ui.HumanBytes(total)))
+	return []string{
+		stFaint.Render(strings.Repeat("─", max(1, w))),
+		" " + counts,
+		" " + rss,
+	}
 }
 
 func (m model) glyph(in control.InstanceView) string {
@@ -545,20 +607,27 @@ func (m model) viewDetail(v control.InstanceView, w int) string {
 	switch {
 	case v.LastError != "":
 		status = stErr.Render("✕ " + truncate(v.LastError, w-6))
-	case st == "idle" && !v.IdleSince.IsZero() && m.resp.IdleTimeout > 0:
-		status = m.reapGauge(v, w-4)
 	case st == "active":
 		status = stGreen.Render("● serving " + fmt.Sprint(v.Conns) + " connection(s)")
 	case st == "booting":
 		status = lipgloss.NewStyle().Foreground(cCyan).Render(string(spinner[m.frame%len(spinner)]) + " booting…")
-	default:
+	case st == "idle":
+		// Running with zero connections — not asleep. Show the reap countdown
+		// when we have the data; otherwise just say it's up and waiting.
+		if !v.IdleSince.IsZero() && m.resp.IdleTimeout > 0 {
+			status = m.reapGauge(v, w-4)
+		} else {
+			status = lipgloss.NewStyle().Foreground(cGold).Render("○ up — idle, 0 connections")
+		}
+	default: // reaped
 		status = stDim.Render("· asleep — connect to wake it")
 	}
 
+	dataLine := stLabel.Render("data ") + stDim.Render(truncate(abbrevHome(v.DataDir), w-8))
 	card := strings.Join([]string{
 		title,
 		stFaint.Render(strings.Repeat("╌", max(1, w-4))),
-		row1, row2, urlLine, "",
+		row1, row2, urlLine, dataLine, "",
 		ramLine, connLine, "",
 		status,
 	}, "\n")
@@ -610,10 +679,7 @@ func (m model) viewLogs(v control.InstanceView, w int) string {
 // ── footer ────────────────────────────────────────────────────────────────
 func (m model) viewFooter() string {
 	if m.filtering {
-		return stAccent.Render(m.filter.View())
-	}
-	if m.flash != "" {
-		return m.flash
+		return stAccent.Render(m.filter.View()) + stFaint.Render("   enter/esc")
 	}
 	key := func(k, label string) string { return stAccent.Render(k) + stDim.Render(" "+label) }
 	return strings.Join([]string{
@@ -702,6 +768,17 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// abbrevHome shortens a path under the user's home dir to a leading ~.
+func abbrevHome(p string) string {
+	if p == "" {
+		return "—"
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
 }
 func orEnv(s string) string {
 	if s == "" {

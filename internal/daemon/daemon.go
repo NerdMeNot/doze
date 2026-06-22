@@ -153,6 +153,7 @@ func (h *handler) Status() control.Response {
 		}
 		v := control.ViewFromRegistry(inst, engineType, version, declared)
 		hydrateEndpoint(&v, eps[inst.Name])
+		v.DataDir = h.dataDir(inst.Name)
 		if inst.PID != 0 {
 			v.RAM = ui.RSSBytes(inst.PID)
 		}
@@ -166,10 +167,16 @@ func (h *handler) Status() control.Response {
 				Version: decl.Version.String(), Declared: true,
 			}
 			hydrateEndpoint(&v, eps[decl.Name])
+			v.DataDir = h.dataDir(decl.Name)
 			resp.Instances = append(resp.Instances, v)
 		}
 	}
 	return resp
+}
+
+// dataDir is where an instance's backend writes its data.
+func (h *handler) dataDir(name string) string {
+	return filepath.Join(h.d.cfg.ClustersDir(), name)
 }
 
 func hydrateEndpoint(v *control.InstanceView, ep endpoints.Endpoint) {

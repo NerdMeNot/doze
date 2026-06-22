@@ -35,6 +35,7 @@ type InstanceView struct {
 	Endpoint  string    `json:"endpoint,omitempty"`   // client-facing address
 	URL       string    `json:"url,omitempty"`        // full connection string
 	EnvVar    string    `json:"env_var,omitempty"`    // conventional env var (DATABASE_URL, …)
+	DataDir   string    `json:"data_dir,omitempty"`   // where this instance's data is written
 	LastError string    `json:"last_error,omitempty"` // most recent boot/crash failure
 	Declared  bool      `json:"declared"`
 }
