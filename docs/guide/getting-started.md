@@ -5,9 +5,13 @@ local backend — a Postgres database and a cache — wired into an app, with th
 engines booting on demand and sleeping when idle. We'll explain what you're
 seeing as we go.
 
+> **Prerequisites:** Go 1.26+, on macOS or Linux (Apple Silicon or x86-64). That's
+> it — you don't install Postgres, Redis, or anything else. Hit a snag? See
+> [Troubleshooting](troubleshooting.md).
+
 ## 1. Install
 
-doze is a single binary (needs Go 1.26+ to build):
+doze is a single binary:
 
 ```sh
 go install github.com/nerdmenot/doze/cmd/doze@latest

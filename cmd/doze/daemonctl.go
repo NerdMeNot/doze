@@ -119,8 +119,8 @@ func restartCmd() *cobra.Command {
 func logsCmd() *cobra.Command {
 	var follow bool
 	cmd := &cobra.Command{
-		Use:   "logs [db]",
-		Short: "Show daemon logs, or a database's backend logs",
+		Use:   "logs [instance]",
+		Short: "Show daemon logs, or an instance's backend logs",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadConfig()

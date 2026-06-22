@@ -17,7 +17,7 @@ import (
 
 func downCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "down [db]",
+		Use:   "down [instance]",
 		Short: "Stop a running backend (or all of them)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

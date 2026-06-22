@@ -23,6 +23,13 @@ Read these in order to build a working mental model:
   · [SNS](recipes/sns.md) · [Workflows](recipes/workflows.md) ·
   [Config layout](recipes/config-layout.md) · [Full stacks](recipes/stacks.md)
 
+## When things go wrong
+
+- **[Troubleshooting](guide/troubleshooting.md)** — daemon won't start, downloads
+  fail, an instance errors, can't connect, resetting state.
+- **[FAQ](guide/faq.md)** — production readiness, CI, Windows/WSL/Docker, the
+  lockfile, sharing a setup, uninstalling.
+
 ## Reference
 
 - **[Configuration](reference/configuration.md)** — every block and field in `doze.hcl`.

@@ -15,7 +15,7 @@ import (
 
 func upCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "up [db]",
+		Use:   "up [instance]",
 		Short: "Converge config: provision declared instances",
 		Long: "up brings the local environment in line with doze.hcl — creating or\n" +
 			"updating databases, schemas, roles, privileges, extensions, and the\n" +

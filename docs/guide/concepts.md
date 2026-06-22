@@ -3,6 +3,14 @@
 A handful of ideas explain everything doze does. Once they click, the whole tool
 feels obvious.
 
+**A note on words.** Throughout the docs:
+
+- **engine** — the software (PostgreSQL, Valkey, S3, …).
+- **instance** — one thing you declare (`postgres "app" {}` is the `app`
+  instance); each has its own data, endpoint, and lifecycle.
+- **backend** — the actual process running an instance once it's booted.
+- **daemon** — the long-running `doze serve` that fronts every instance.
+
 ## The daemon and per-instance endpoints
 
 doze runs a small background **daemon** (`doze serve`, started for you by most

@@ -10,6 +10,10 @@ doze fetches the real engines, boots each the moment something connects, and put
 it back to sleep when you walk away. At rest, your laptop is quiet: only a tiny
 daemon runs.
 
+[![CI](https://github.com/NerdMeNot/doze/actions/workflows/ci.yml/badge.svg)](https://github.com/NerdMeNot/doze/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](#install)
+
 </div>
 
 ```hcl
@@ -136,16 +140,23 @@ Five ideas, and you've got the whole model:
 spinning up a realistic backend for a new project in seconds. If you've ever run
 `docker-compose up` just to work on one service, doze is for you.
 
-**Not for** production, replication, or anything that needs HA — doze runs single
-local instances tuned for development. The local AWS services (S3/SQS/SNS) are
-dev-grade conveniences, not a stand-in for real AWS.
+**Not for** production. doze runs **single** local instances (no replication, no
+HA, no failover), tuned toward fast iteration over durability, and reaps them when
+idle — so it's not a place to keep data you can't lose. The local AWS services
+(S3/SQS/SNS) are dev-grade conveniences, not a stand-in for real AWS. Use managed
+Postgres/Redis and real AWS in production. (Full rationale in the
+[FAQ](docs/guide/faq.md#is-doze-production-ready).)
 
-**Platforms:** macOS and Linux, on Apple Silicon and x86-64.
+**Platforms:** macOS and Linux, on Apple Silicon and x86-64. (No native Windows;
+WSL2 works.)
 
 ## Install
 
+**Prerequisites:** Go 1.26+, macOS or Linux (Apple Silicon or x86-64). You do
+*not* install Postgres, Redis, etc. — doze fetches those for you.
+
 ```sh
-# Recommended: install the CLI (Go 1.26+)
+# Recommended: install the CLI
 go install github.com/nerdmenot/doze/cmd/doze@latest
 
 # Or build from a clone
@@ -173,6 +184,15 @@ Reference, when you need it:
 - **[CLI](docs/reference/cli.md)** — every command and flag.
 - **[Managing binaries](docs/BINARIES.md)** — the mirror, the lockfile, self-hosting.
 - **[Extensions](docs/EXTENSIONS.md)** · **[Architecture](docs/ARCHITECTURE.md)** (for contributors)
+
+Stuck or curious? **[Troubleshooting](docs/guide/troubleshooting.md)** ·
+**[FAQ](docs/guide/faq.md)**
+
+## Contributing
+
+Issues and PRs welcome — see [CONTRIBUTING](CONTRIBUTING.md). By participating you
+agree to the [Code of Conduct](CODE_OF_CONDUCT.md). To report a vulnerability, see
+the [security policy](SECURITY.md).
 
 ## License
 
