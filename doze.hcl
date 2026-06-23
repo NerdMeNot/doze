@@ -65,16 +65,8 @@ kvrocks "store" {
   version = 2
 }
 
-# --- FerretDB (MongoDB wire) — stores data in a Postgres backend ------------
-postgres "events_pg" {
-  version    = 16
-  extensions = ["documentdb"]    # FerretDB v2's storage extension
-}
-
-ferretdb "events" {
-  version = 2
-  backend = "events_pg"          # boots and holds this postgres instance
-}
+# --- DocumentDB (MongoDB wire) — a self-contained FerretDB + Postgres bundle -
+documentdb "events" {}           # connect over MONGODB_URI; no version, no backend
 
 # --- Local AWS (built into doze: no Docker, no JVM, no LocalStack) -----------
 # doze run / doze env inject AWS_ENDPOINT_URL_S3/SQS/SNS + dummy creds + region,
@@ -104,7 +96,7 @@ sqs "jobs" {
 }
 
 sns "events_bus" {
-  sqs = "jobs"                     # backing SQS instance for fanout delivery
+  sqs = sqs.jobs.name              # typed reference: builds the dependency edge
 
   topic "signups" {}
 

@@ -8,10 +8,8 @@ package endpoints
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -36,8 +34,8 @@ type Endpoint struct {
 // For computes the endpoints for every declared instance.
 func For(cfg *config.Config) ([]Endpoint, error) {
 	out := make([]Endpoint, 0, len(cfg.Instances))
-	for i, decl := range cfg.Instances {
-		addr, err := clientAddr(cfg.Listen, decl, i)
+	for _, decl := range cfg.Instances {
+		addr, err := cfg.InstanceAddr(decl)
 		if err != nil {
 			return nil, err
 		}
@@ -57,33 +55,10 @@ func For(cfg *config.Config) ([]Endpoint, error) {
 
 // ClientAddr returns the client-facing address assigned to a named instance.
 func ClientAddr(cfg *config.Config, name string) (string, error) {
-	for i, decl := range cfg.Instances {
-		if decl.Name == name {
-			return clientAddr(cfg.Listen, decl, i)
-		}
+	if decl := cfg.Lookup(name); decl != nil {
+		return cfg.InstanceAddr(decl)
 	}
 	return "", fmt.Errorf("instance %q is not declared", name)
-}
-
-// clientAddr derives an instance's client-facing address: a per-instance
-// `listen` override wins; otherwise, for a TCP base, each instance gets
-// base_port+index; for a unix base, a per-instance socket beside it.
-func clientAddr(base string, decl *config.InstanceDecl, index int) (string, error) {
-	if decl.Listen != "" {
-		return decl.Listen, nil
-	}
-	if path, ok := strings.CutPrefix(base, "unix:"); ok {
-		return "unix:" + filepath.Join(filepath.Dir(path), decl.Name+".sock"), nil
-	}
-	host, portStr, err := net.SplitHostPort(base)
-	if err != nil {
-		return "", fmt.Errorf("invalid listen address %q: %w", base, err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return "", fmt.Errorf("invalid listen port %q: %w", portStr, err)
-	}
-	return net.JoinHostPort(host, strconv.Itoa(port+index)), nil
 }
 
 func engineEndpoint(addr string) engine.Endpoint {

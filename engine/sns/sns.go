@@ -30,15 +30,6 @@ type Driver struct {
 	awslocal.BaseDriver
 }
 
-// DependsOn implements engine.Dependent: an SNS instance that fans out to an SQS
-// instance needs it running first (and held).
-func (Driver) DependsOn(inst engine.Instance) []string {
-	if cfg, ok := inst.Spec.(*Config); ok && cfg != nil && cfg.SQS != "" {
-		return []string{cfg.SQS}
-	}
-	return nil
-}
-
 // childEnv passes the backing SQS instance's backend socket to the SNS server so
 // it can deliver sqs-protocol subscriptions.
 func childEnv(inst engine.Instance) []string {

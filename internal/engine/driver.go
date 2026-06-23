@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // SlowBooter is implemented by engines whose cold boot legitimately takes longer
@@ -87,12 +88,13 @@ type Converger interface {
 	Converge(ctx context.Context, inst Instance, tc Toolchain, ep Endpoint) error
 }
 
-// Dependent is implemented by engines whose instances require other declared
-// instances to be running first — e.g. FerretDB needs its Postgres backend. The
-// runtime boots the dependencies, injects their resolved Dep into Instance.Deps,
-// and holds them running for as long as the dependent runs.
-type Dependent interface {
-	DependsOn(inst Instance) []string
+// Attributer is implemented by engines that expose attributes beyond the generic
+// baseline (name, engine, host, port, address, socket, url) under their
+// <type>.<name> reference. The runtime/config merge these over the baseline when
+// building the evaluation context, so config can reference e.g. postgres.x.owner
+// or sqs.jobs.queues. Optional — engines without it expose only the baseline.
+type Attributer interface {
+	Attributes(inst Instance, ep Endpoint) map[string]cty.Value
 }
 
 // BackendProvider is implemented by engines that can serve as another instance's

@@ -10,9 +10,11 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +75,11 @@ type InstanceDecl struct {
 	Version engine.VersionSpec  // "16" (major) or "16.14" (exact)
 	Listen  string              // optional per-instance endpoint override
 	Spec    engine.EngineConfig // engine-specific config (decoded by the driver)
+	// Deps are the names of other declared instances this one references (e.g. an
+	// sns instance referencing sqs.jobs). Derived from the config reference graph,
+	// not hand-declared; the runtime boots and holds them first.
+	Index int      // declaration order, used for endpoint address assignment
+	Deps  []string // dependency instance names, in reference order
 }
 
 // common is the partial-decode target for the fields config reads from every
@@ -215,6 +222,7 @@ func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string) (*C
 
 	declRanges := map[string]hcl.Range{}
 	seenDefaults, seenTLS := false, false
+	var pending []*pendingInstance
 	for _, block := range content.Blocks {
 		switch block.Type {
 		case "defaults":
@@ -234,14 +242,18 @@ func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string) (*C
 				return nil, err
 			}
 		default:
-			if err := cfg.decodeInstance(parser, block, declRanges); err != nil {
+			p, err := cfg.decodeInstanceShell(parser, block, declRanges)
+			if err != nil {
 				return nil, err
 			}
+			pending = append(pending, p)
 		}
 	}
 
-	for _, inst := range cfg.Instances {
-		cfg.index[inst.Name] = inst
+	// Second pass: build the reference graph and decode each instance's body in
+	// dependency order, so references like sqs.jobs.name resolve to a value.
+	if err := cfg.evaluate(parser, pending); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -342,10 +354,14 @@ func (cfg *Config) decodeTLS(parser *hclparse.Parser, block *hcl.Block) error {
 	return nil
 }
 
-func (cfg *Config) decodeInstance(parser *hclparse.Parser, block *hcl.Block, declRanges map[string]hcl.Range) error {
+// decodeInstanceShell decodes the engine-agnostic fields (version, listen) and
+// registers the instance, but defers the driver-specific body decode to the
+// evaluation pass (evaluate) so cross-resource references resolve in dependency
+// order. It returns the pending decode for that pass.
+func (cfg *Config) decodeInstanceShell(parser *hclparse.Parser, block *hcl.Block, declRanges map[string]hcl.Range) (*pendingInstance, error) {
 	name := block.Labels[0]
 	if first, dup := declRanges[name]; dup {
-		return posErr(parser, block.DefRange,
+		return nil, posErr(parser, block.DefRange,
 			fmt.Sprintf("%s %q: instance %q is already declared", block.Type, name, name),
 			"first declared at "+first.String())
 	}
@@ -353,16 +369,16 @@ func (cfg *Config) decodeInstance(parser *hclparse.Parser, block *hcl.Block, dec
 
 	var c common
 	if diags := gohcl.DecodeBody(block.Body, nil, &c); diags.HasErrors() {
-		return diagError(parser, diags)
+		return nil, diagError(parser, diags)
 	}
 	drv, ok := engine.Lookup(block.Type)
 	if !ok {
-		return posErr(parser, block.DefRange, fmt.Sprintf("no driver registered for engine %q", block.Type), "")
+		return nil, posErr(parser, block.DefRange, fmt.Sprintf("no driver registered for engine %q", block.Type), "")
 	}
 	if c.Version == "" {
 		// Engines that ship inside doze (the local-AWS services) have no version.
 		if _, versionless := drv.(engine.Versionless); !versionless {
-			return posErr(parser, block.DefRange,
+			return nil, posErr(parser, block.DefRange,
 				fmt.Sprintf("%s %q: missing required \"version\"", block.Type, name),
 				"add e.g. version = 16 (a major) or version = \"16.14\" (exact)")
 		}
@@ -373,29 +389,53 @@ func (cfg *Config) decodeInstance(parser *hclparse.Parser, block *hcl.Block, dec
 		Name:    name,
 		Version: engine.VersionSpec(c.Version),
 		Listen:  c.Listen,
+		Index:   len(cfg.Instances),
 	}
-	if dec, ok := drv.(engine.ConfigDecoder); ok {
-		// Resolve relative paths (e.g. extension bundles) against the file that
-		// declared this block, so split configs in doze.d/ behave intuitively.
-		baseDir := "."
-		if f := block.DefRange.Filename; f != "" {
-			baseDir = filepath.Dir(f)
-		} else if cfg.path != "" {
-			baseDir = filepath.Dir(cfg.path)
-		}
-		spec, err := dec.DecodeConfig(c.Remain, nil, baseDir)
-		if err != nil {
-			return fmt.Errorf("%s %q: %w", block.Type, name, err)
-		}
-		inst.Spec = spec
+	// Resolve relative paths (e.g. extension bundles) against the file that
+	// declared this block, so split configs behave intuitively.
+	baseDir := "."
+	if f := block.DefRange.Filename; f != "" {
+		baseDir = filepath.Dir(f)
+	} else if cfg.path != "" {
+		baseDir = filepath.Dir(cfg.path)
 	}
 	cfg.index[name] = inst
 	cfg.Instances = append(cfg.Instances, inst)
-	return nil
+	return &pendingInstance{
+		decl:     inst,
+		drv:      drv,
+		body:     block.Body,
+		remain:   c.Remain,
+		defRange: block.DefRange,
+		baseDir:  baseDir,
+	}, nil
 }
 
 // Lookup returns the declared instance by name, or nil.
 func (c *Config) Lookup(name string) *InstanceDecl { return c.index[name] }
+
+// InstanceAddr returns the client-facing address assigned to a declared instance:
+// a per-instance `listen` override wins; otherwise, for a TCP base each instance
+// gets base_port+Index, and for a unix base a per-instance socket beside it. It is
+// the single source of truth for endpoint assignment (endpoints and the reference
+// evaluator both call it).
+func (c *Config) InstanceAddr(decl *InstanceDecl) (string, error) {
+	if decl.Listen != "" {
+		return decl.Listen, nil
+	}
+	if path, ok := strings.CutPrefix(c.Listen, "unix:"); ok {
+		return "unix:" + filepath.Join(filepath.Dir(path), decl.Name+".sock"), nil
+	}
+	host, portStr, err := net.SplitHostPort(c.Listen)
+	if err != nil {
+		return "", fmt.Errorf("invalid listen address %q: %w", c.Listen, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid listen port %q: %w", portStr, err)
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port+decl.Index)), nil
+}
 
 // Add registers an additional instance at runtime. It is used to inject
 // synthetic instances (e.g. `doze ephemeral`) that are not in the file.

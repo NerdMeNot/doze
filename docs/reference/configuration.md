@@ -53,6 +53,39 @@ Every `<engine> "<name>" { … }` block accepts:
 
 ---
 
+## References & expressions
+
+Values are HCL expressions, not just literals. You can call functions and—most
+usefully—**reference other instances** by `<engine>.<name>.<attribute>`:
+
+```hcl
+sns "events_bus" {
+  sqs = sqs.jobs.name              # reference → builds the dependency edge
+}
+```
+
+A reference does two things: it resolves to the attribute's value, and it makes
+the referencing instance **depend on** the referenced one (doze boots and holds
+the dependency first — no hand-declared ordering). Referencing an instance that
+isn't declared is a parse-time error, and reference cycles are rejected.
+
+Every instance exposes these baseline attributes:
+
+| Attribute | Description |
+|---|---|
+| `name` / `engine` | The instance name and its engine type. |
+| `address` | Client-facing `host:port` (or `unix:/path`). |
+| `host` / `port` | Split address (empty/`0` for a unix socket). |
+| `socket` | Unix socket path (empty for TCP). |
+| `url` | The connection string doze injects (e.g. `postgres://…`). |
+| `env_var` | The conventional variable name (`DATABASE_URL`, …). |
+
+Functions include the common string/collection/number/encoding helpers (`upper`,
+`join`, `format`, `coalesce`, `merge`, `jsonencode`, …) plus `env("NAME")` to read
+a host environment variable (with an optional default).
+
+---
+
 ## postgres
 
 Real PostgreSQL (14–17). On boot, doze creates the database (named after the
@@ -271,7 +304,7 @@ Local pub/sub with SNS→SQS fanout and webhooks.
 
 ```hcl
 sns "events" {
-  sqs = "jobs"
+  sqs = sqs.jobs.name
   topic "signups" {}
   subscribe "signups" {
     protocol = "sqs"

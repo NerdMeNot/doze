@@ -16,6 +16,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/johannesboyne/gofakes3 v0.0.0-20260208201424-4c385a1f6a73
 	github.com/spf13/cobra v1.10.2
+	github.com/zclconf/go-cty v1.16.3
 	go.etcd.io/bbolt v1.3.5
 	golang.org/x/sync v0.21.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -55,7 +56,6 @@ require (
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/zclconf/go-cty v1.16.3 // indirect
 	go.shabbyrobe.org/gocovmerge v0.0.0-20230507111327-fa4f82cfbf4d // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect

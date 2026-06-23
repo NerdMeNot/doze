@@ -52,18 +52,25 @@ func (leafDriver) BackendSocket(dir string, _ int) string                       
 func (leafDriver) ConnString(engine.Instance, engine.Endpoint) (string, string) { return "", "" }
 func (leafDriver) BackendURL(inst engine.Instance) string                       { return "fake://" + inst.Name }
 
-// depDriver depends on the instance named "base".
+// depDriver is a second engine type used to verify that a reference to another
+// instance (tleaf.base) is what makes the runtime boot and hold that dependency —
+// no hand-declared DependsOn; the edge is derived from the config graph.
 type depDriver struct{ leafDriver }
 
-func (depDriver) Type() string                       { return "tdep" }
-func (depDriver) DependsOn(engine.Instance) []string { return []string{"base"} }
+func (depDriver) Type() string { return "tdep" }
 
 func TestDependencyBootAndHold(t *testing.T) {
 	t.Setenv("DOZE_HOME", t.TempDir())
 	engine.Register(leafDriver{})
 	engine.Register(depDriver{})
 
-	cfg, err := config.Parse([]byte("tleaf \"base\" { version = 1 }\ntdep \"app\" { version = 1 }\n"), "")
+	cfg, err := config.Parse([]byte(`
+tleaf "base" { version = 1 }
+tdep "app" {
+  version = 1
+  base    = tleaf.base.name
+}
+`), "")
 	if err != nil {
 		t.Fatal(err)
 	}

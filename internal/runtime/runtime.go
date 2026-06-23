@@ -161,11 +161,12 @@ func (r *Runtime) bootLocked(ctx context.Context, name string) (engine.Endpoint,
 	r.reg.MarkBooting(name)
 	r.logf("booting %q (%s %s)…", name, decl.Type, decl.Version)
 
-	// Dependencies: boot and hold any instances this one needs (e.g. FerretDB's
-	// Postgres backend) before provisioning this one.
+	// Dependencies: boot and hold any instances this one references (derived from
+	// the config reference graph, e.g. an sns instance referencing sqs.jobs)
+	// before provisioning this one.
 	var held []string
-	if d, ok := drv.(engine.Dependent); ok {
-		deps, h, err := r.bootDeps(ctx, name, inst, d)
+	if len(decl.Deps) > 0 {
+		deps, h, err := r.bootDeps(ctx, name, decl.Deps)
 		if err != nil {
 			r.reg.MarkReaped(name)
 			r.reg.SetError(name, err.Error())
@@ -246,7 +247,7 @@ func (r *Runtime) ToggleKeepAwake(name string) bool { return r.reg.ToggleKeepAwa
 // bootDeps boots and holds (via Acquire) every instance the named instance
 // depends on, returning the resolved deps and the list of held names. On any
 // failure it releases the deps it already held.
-func (r *Runtime) bootDeps(ctx context.Context, name string, inst engine.Instance, d engine.Dependent) (map[string]engine.Dep, []string, error) {
+func (r *Runtime) bootDeps(ctx context.Context, name string, depNames []string) (map[string]engine.Dep, []string, error) {
 	deps := map[string]engine.Dep{}
 	var held []string
 	release := func() {
@@ -254,7 +255,7 @@ func (r *Runtime) bootDeps(ctx context.Context, name string, inst engine.Instanc
 			r.Release(dn)
 		}
 	}
-	for _, dn := range d.DependsOn(inst) {
+	for _, dn := range depNames {
 		if dn == "" || dn == name {
 			continue
 		}

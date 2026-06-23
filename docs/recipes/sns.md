@@ -14,7 +14,7 @@ sqs "jobs" {
 }
 
 sns "events" {
-  sqs = "jobs"                  # backing SQS instance for delivery
+  sqs = sqs.jobs.name           # typed reference to the backing SQS instance
 
   topic "signups" {}
   subscribe "signups" {
