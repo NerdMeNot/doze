@@ -251,7 +251,10 @@ func (r *Runtime) ToggleKeepAwake(name string) bool { return r.reg.ToggleKeepAwa
 // bootDeps boots and holds (via Acquire) every instance the named instance
 // depends on, returning the resolved deps and the list of held names. On any
 // failure it releases the deps it already held.
-func (r *Runtime) bootDeps(ctx context.Context, name string, depNames []string) (map[string]engine.Dep, []string, error) {
+// The dependency's Condition (healthy/started) is groundwork for the future
+// supervised process engine; today Boot always waits until the backend is healthy,
+// which satisfies both conditions, so the runtime treats them alike for now.
+func (r *Runtime) bootDeps(ctx context.Context, name string, depList []engine.Dependency) (map[string]engine.Dep, []string, error) {
 	deps := map[string]engine.Dep{}
 	var held []string
 	release := func() {
@@ -259,7 +262,8 @@ func (r *Runtime) bootDeps(ctx context.Context, name string, depNames []string) 
 			r.Release(dn)
 		}
 	}
-	for _, dn := range depNames {
+	for _, dep := range depList {
+		dn := dep.Name
 		if dn == "" || dn == name {
 			continue
 		}
@@ -469,6 +473,9 @@ func (r *Runtime) RunReaper(ctx context.Context) {
 			return
 		case <-ticker.C:
 			for _, name := range r.reg.Reapable(timeout) {
+				if r.supervised(name) {
+					continue // a supervised (always-on) instance is exempt from the reaper
+				}
 				if err := r.Stop(context.Background(), name); err != nil {
 					r.logf("reaping %q failed: %v", name, err)
 				} else {
@@ -477,6 +484,25 @@ func (r *Runtime) RunReaper(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// supervised reports whether an instance's engine marks it as a long-lived,
+// always-on process (engine.Lifecycle) — exempt from the idle reaper. No current
+// engine does; it is the seam a future supervised `process` engine plugs into.
+func (r *Runtime) supervised(name string) bool {
+	decl := r.cfg.Lookup(name)
+	if decl == nil {
+		return false
+	}
+	drv, ok := engine.Lookup(decl.Type)
+	if !ok {
+		return false
+	}
+	lc, ok := drv.(engine.Lifecycle)
+	if !ok {
+		return false
+	}
+	return lc.Supervised(r.instanceFor(decl, drv))
 }
 
 // Up boots an instance and converges it to its declared state, leaving it

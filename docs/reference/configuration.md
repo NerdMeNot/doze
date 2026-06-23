@@ -155,6 +155,23 @@ valkey "shard" {
 `count = 0` (or an empty `for_each`) produces no instances. A block can't set both.
 Keys are sanitized for use in names/paths (`orders.fifo` → `orders_fifo`).
 
+### Explicit ordering: `depends_on`
+
+References already create dependencies, so you rarely need this. For an ordering
+that isn't expressed through a reference, `depends_on` adds it:
+
+```hcl
+sqs "jobs" {
+  queue "main" {}
+  depends_on = { "s3.media" = "healthy" }
+}
+```
+
+The key is an instance address (or bare name); the value is the readiness
+condition — `healthy` (wait until it accepts connections, the default for every
+reference) or `started`. The `started` condition is groundwork for a future
+process engine; today doze waits for `healthy` either way.
+
 ---
 
 ## postgres

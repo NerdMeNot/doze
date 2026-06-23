@@ -104,6 +104,16 @@ type Pruner interface {
 	Prune(ctx context.Context, inst Instance, tc Toolchain, ep Endpoint, removed []Object) error
 }
 
+// Lifecycle is implemented by engines whose instances are supervised, long-lived
+// processes rather than lazy, idle-reaped backends — the model a future
+// `process` engine (process-compose-style) will use. Supervised returns true to
+// exempt an instance from the idle reaper and keep it running. Optional: engines
+// without it are lazy (boot on connect, reap when idle), the default for every
+// current engine.
+type Lifecycle interface {
+	Supervised(inst Instance) bool
+}
+
 // Attributer is implemented by engines that expose attributes beyond the generic
 // baseline (name, engine, host, port, address, socket, url) under their
 // <type>.<name> reference. The runtime/config merge these over the baseline when

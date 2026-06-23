@@ -170,7 +170,7 @@ fake "b" {
 		t.Errorf("ref = %q, want %q", got, "a")
 	}
 	// ...and the dependency edge is derived from it.
-	if len(b.Deps) != 1 || b.Deps[0] != "a" {
+	if len(b.Deps) != 1 || b.Deps[0].Name != "a" {
 		t.Errorf("b.Deps = %v, want [a]", b.Deps)
 	}
 	// The referenced instance has no deps.
@@ -490,7 +490,84 @@ fake "client" {
 	if got := c.Spec.(*fakeConfig).Ref; got != "node_a" {
 		t.Errorf("ref = %q, want node_a", got)
 	}
-	if len(c.Deps) != 1 || c.Deps[0] != "node_a" {
+	if len(c.Deps) != 1 || c.Deps[0].Name != "node_a" {
 		t.Errorf("client.Deps = %v, want [node_a]", c.Deps)
+	}
+}
+
+func TestReferenceDepIsHealthy(t *testing.T) {
+	cfg, err := Parse([]byte(`
+fake "a" { version = 1 }
+fake "b" {
+  version = 1
+  ref     = fake.a.name
+}
+`), "doze.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := cfg.Lookup("b").Deps
+	if len(deps) != 1 || deps[0].Name != "a" || deps[0].Condition != engine.Healthy {
+		t.Errorf("reference dep = %+v, want {a healthy}", deps)
+	}
+}
+
+func TestDependsOnAddsConditionedEdge(t *testing.T) {
+	cfg, err := Parse([]byte(`
+fake "a" { version = 1 }
+fake "b" {
+  version    = 1
+  depends_on = { "fake.a" = "started" }
+}
+`), "doze.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := cfg.Lookup("b").Deps
+	if len(deps) != 1 || deps[0].Name != "a" || deps[0].Condition != engine.Started {
+		t.Errorf("depends_on dep = %+v, want {a started}", deps)
+	}
+}
+
+func TestDependsOnOverridesReferenceCondition(t *testing.T) {
+	cfg, err := Parse([]byte(`
+fake "a" { version = 1 }
+fake "b" {
+  version    = 1
+  ref        = fake.a.name
+  depends_on = { "fake.a" = "started" }
+}
+`), "doze.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := cfg.Lookup("b").Deps
+	if len(deps) != 1 || deps[0].Condition != engine.Started {
+		t.Errorf("explicit condition should override the reference default: %+v", deps)
+	}
+}
+
+func TestDependsOnUndeclared(t *testing.T) {
+	_, err := Parse([]byte(`
+fake "b" {
+  version    = 1
+  depends_on = { "fake.ghost" = "healthy" }
+}
+`), "doze.hcl")
+	if err == nil || !strings.Contains(err.Error(), "depends_on") || !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("expected depends_on undeclared error, got %v", err)
+	}
+}
+
+func TestDependsOnInvalidCondition(t *testing.T) {
+	_, err := Parse([]byte(`
+fake "a" { version = 1 }
+fake "b" {
+  version    = 1
+  depends_on = { "fake.a" = "whenever" }
+}
+`), "doze.hcl")
+	if err == nil || !strings.Contains(err.Error(), "condition") {
+		t.Errorf("expected invalid-condition error, got %v", err)
 	}
 }

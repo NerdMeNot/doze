@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -17,13 +18,14 @@ import (
 // pendingInstance carries an instance whose engine-agnostic fields are decoded
 // but whose driver body is decoded later, in dependency order, by evaluate.
 type pendingInstance struct {
-	decl     *InstanceDecl
-	drv      engine.Driver
-	body     hcl.Body         // block body (meta-args stripped), for reference extraction
-	remain   hcl.Body         // body minus common fields, for the driver decode
-	ctx      *hcl.EvalContext // the context this stamp decodes against (carries each/count)
-	defRange hcl.Range
-	baseDir  string
+	decl         *InstanceDecl
+	drv          engine.Driver
+	body         hcl.Body                    // block body (meta-args stripped), for reference extraction
+	remain       hcl.Body                    // body minus common fields, for the driver decode
+	ctx          *hcl.EvalContext            // the context this stamp decodes against (carries each/count)
+	explicitDeps map[string]engine.Condition // explicit depends_on: instance name -> condition
+	defRange     hcl.Range
+	baseDir      string
 }
 
 // evaluate is config's second pass: it derives the cross-instance reference graph
@@ -88,24 +90,23 @@ func (cfg *Config) evaluate(parser *hclparse.Parser, pending []*pendingInstance,
 	return nil
 }
 
-// instanceDeps returns the names of other declared instances referenced by p's
-// body. A traversal whose root is an engine type and whose next segment names a
-// declared instance (e.g. sqs.jobs) is a reference; an unknown instance name is a
-// positioned error. Duplicate and self references are dropped.
-func (cfg *Config) instanceDeps(parser *hclparse.Parser, p *pendingInstance, knownTypes map[string]bool) ([]string, error) {
-	seen := map[string]bool{}
-	var deps []string
+// instanceDeps returns the other declared instances p must boot first: every
+// instance it references (a Healthy dependency) plus any explicit depends_on
+// (which may set a stronger or weaker condition). A reference whose root is an
+// engine type and whose next segment names a declared instance (e.g. sqs.jobs) is
+// a dependency; an unknown instance is a positioned error. Self references drop.
+func (cfg *Config) instanceDeps(parser *hclparse.Parser, p *pendingInstance, knownTypes map[string]bool) ([]engine.Dependency, error) {
+	cond := map[string]engine.Condition{}
+	var order []string
+	// Reference-derived dependencies (always Healthy).
 	for _, t := range referencedTraversals(p.body) {
 		root := t.RootName()
 		if !knownTypes[root] {
 			continue // var./local./functions are handled elsewhere; not a resource ref
 		}
 		name, ok := traversalName(t)
-		if !ok {
+		if !ok || name == p.decl.Name {
 			continue
-		}
-		if name == p.decl.Name {
-			continue // self reference
 		}
 		if _, declared := cfg.index[name]; !declared {
 			rng := t.SourceRange()
@@ -113,12 +114,40 @@ func (cfg *Config) instanceDeps(parser *hclparse.Parser, p *pendingInstance, kno
 				fmt.Sprintf("reference to undeclared instance %q", root+"."+name),
 				fmt.Sprintf("no %s instance named %q is declared", root, name))
 		}
-		if !seen[name] {
-			seen[name] = true
-			deps = append(deps, name)
+		if _, ok := cond[name]; !ok {
+			order = append(order, name)
+			cond[name] = engine.Healthy
 		}
 	}
+	// Explicit depends_on conditions (override the default, add new edges).
+	for _, name := range sortedConditionKeys(p.explicitDeps) {
+		if name == p.decl.Name {
+			continue
+		}
+		if _, declared := cfg.index[name]; !declared {
+			return nil, posErr(parser, p.defRange,
+				fmt.Sprintf("%s %q: depends_on references undeclared instance %q", p.decl.Type, p.decl.Name, name), "")
+		}
+		if _, ok := cond[name]; !ok {
+			order = append(order, name)
+		}
+		cond[name] = p.explicitDeps[name]
+	}
+	deps := make([]engine.Dependency, 0, len(order))
+	for _, n := range order {
+		deps = append(deps, engine.Dependency{Name: n, Condition: cond[n]})
+	}
 	return deps, nil
+}
+
+// sortedConditionKeys returns m's keys sorted, for deterministic dep order.
+func sortedConditionKeys(m map[string]engine.Condition) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // referencedTraversals collects every variable traversal in body, recursing into
@@ -177,7 +206,7 @@ func topoOrder(parser *hclparse.Parser, pending []*pendingInstance, byName map[s
 		}
 		state[p.decl.Name] = gray
 		for _, dn := range p.decl.Deps {
-			if dep := byName[dn]; dep != nil {
+			if dep := byName[dn.Name]; dep != nil {
 				if err := visit(dep, append(stack, p.decl.Name)); err != nil {
 					return err
 				}

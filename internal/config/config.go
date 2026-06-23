@@ -89,11 +89,12 @@ type InstanceDecl struct {
 	Version engine.VersionSpec  // "16" (major) or "16.14" (exact)
 	Listen  string              // optional per-instance endpoint override
 	Spec    engine.EngineConfig // engine-specific config (decoded by the driver)
-	// Deps are the names of other declared instances this one references (e.g. an
-	// sns instance referencing sqs.jobs). Derived from the config reference graph,
-	// not hand-declared; the runtime boots and holds them first.
-	Index int      // declaration order, used for endpoint address assignment
-	Deps  []string // dependency instance names, in reference order
+	// Deps are the other declared instances this one must boot first (e.g. an sns
+	// instance referencing sqs.jobs), each with a readiness condition. Derived
+	// from the config reference graph (every reference is a Healthy dependency)
+	// and any explicit `depends_on`; the runtime boots and holds them first.
+	Index int                 // declaration order, used for endpoint address assignment
+	Deps  []engine.Dependency // dependencies, in reference order
 }
 
 // common is the partial-decode target for the fields config reads from every
@@ -433,7 +434,7 @@ func (cfg *Config) decodeTLS(parser *hclparse.Parser, block *hcl.Block, ctx *hcl
 // context exposing each.key/each.value or count.index. The meta-args are stripped
 // before the driver decode so the engine's strict schema never sees them.
 func (cfg *Config) expandInstanceBlock(parser *hclparse.Parser, block *hcl.Block, declRanges map[string]hcl.Range, ctx *hcl.EvalContext) ([]*pendingInstance, error) {
-	metaSchema := &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "count"}, {Name: "for_each"}}}
+	metaSchema := &hcl.BodySchema{Attributes: []hcl.AttributeSchema{{Name: "count"}, {Name: "for_each"}, {Name: "depends_on"}}}
 	meta, restBody, diags := block.Body.PartialContent(metaSchema)
 	if diags.HasErrors() {
 		return nil, diagError(parser, diags)
@@ -442,6 +443,14 @@ func (cfg *Config) expandInstanceBlock(parser *hclparse.Parser, block *hcl.Block
 	forEachAttr, hasForEach := meta.Attributes["for_each"]
 	if hasCount && hasForEach {
 		return nil, posErr(parser, block.DefRange, fmt.Sprintf("%s %q: set either count or for_each, not both", block.Type, block.Labels[0]), "")
+	}
+	var explicit map[string]engine.Condition
+	if dep, ok := meta.Attributes["depends_on"]; ok {
+		e, perr := parseDependsOn(parser, dep, ctx)
+		if perr != nil {
+			return nil, perr
+		}
+		explicit = e
 	}
 
 	stamps, err := cfg.instanceStamps(parser, block, countAttr, forEachAttr, hasCount, hasForEach, ctx)
@@ -459,6 +468,7 @@ func (cfg *Config) expandInstanceBlock(parser *hclparse.Parser, block *hcl.Block
 		if err != nil {
 			return nil, err
 		}
+		p.explicitDeps = explicit
 		out = append(out, p)
 	}
 	return out, nil

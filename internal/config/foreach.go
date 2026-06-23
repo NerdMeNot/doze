@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
+
+	"github.com/nerdmenot/doze/internal/engine"
 )
 
 // stamp is one expansion of an instance block: a name suffix and the each/count
@@ -99,6 +102,50 @@ func countStamps(parser *hclparse.Parser, block *hcl.Block, attr *hcl.Attribute,
 		})
 	}
 	return stamps, nil
+}
+
+// parseDependsOn decodes a depends_on meta-arg — a map of an instance address to
+// a readiness condition: depends_on = { "postgres.app" = "healthy" }. The key may
+// be a bare instance name or "<type>.<name>"; the value must be "healthy" or
+// "started". It is groundwork for the future process engine; for current engines
+// the runtime waits for Healthy regardless. Returns instance name → condition.
+func parseDependsOn(parser *hclparse.Parser, attr *hcl.Attribute, ctx *hcl.EvalContext) (map[string]engine.Condition, error) {
+	val, diags := attr.Expr.Value(ctx)
+	if diags.HasErrors() {
+		return nil, diagError(parser, diags)
+	}
+	if val.IsNull() {
+		return nil, nil
+	}
+	ty := val.Type()
+	if !ty.IsObjectType() && !ty.IsMapType() {
+		return nil, posErr(parser, attr.Range, "invalid depends_on",
+			`expected a map of address to condition, e.g. { "postgres.app" = "healthy" }`)
+	}
+	out := map[string]engine.Condition{}
+	it := val.ElementIterator()
+	for it.Next() {
+		k, v := it.Element()
+		if v.Type() != cty.String {
+			return nil, posErr(parser, attr.Range, "invalid depends_on", "condition must be a string")
+		}
+		cond := engine.Condition(v.AsString())
+		if cond != engine.Healthy && cond != engine.Started {
+			return nil, posErr(parser, attr.Range, "invalid depends_on condition",
+				fmt.Sprintf("%q is not a condition (want %q or %q)", v.AsString(), engine.Healthy, engine.Started))
+		}
+		out[dependsOnName(k.AsString())] = cond
+	}
+	return out, nil
+}
+
+// dependsOnName extracts the instance name from a depends_on key, accepting both
+// a bare name ("app") and a "<type>.<name>" address ("postgres.app").
+func dependsOnName(key string) string {
+	if _, name, ok := strings.Cut(key, "."); ok {
+		return name
+	}
+	return key
 }
 
 // sanitizeName makes a for_each key safe for an instance name (and the paths /

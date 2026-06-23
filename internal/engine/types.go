@@ -112,6 +112,31 @@ type Instance struct {
 	Deps      map[string]Dep // resolved dependencies, keyed by instance name
 }
 
+// Condition is how "ready" a dependency must be before its dependent boots.
+// It is groundwork for the future process engine (process-compose-style
+// depends_on); today every dependency is waited for until Healthy.
+type Condition string
+
+const (
+	// Healthy waits until the dependency accepts connections (the default, and
+	// what every current engine needs). Reference-derived dependencies use it.
+	Healthy Condition = "healthy"
+	// Started requires only that the dependency's process has started. It is a
+	// superset of nothing and a subset of Healthy, so the runtime currently
+	// satisfies it by waiting for Healthy; a supervised process engine will later
+	// use the weaker guarantee to start faster.
+	Started Condition = "started"
+)
+
+// Dependency is one instance another instance must boot first, plus the
+// readiness condition to wait for. The config reference graph produces these
+// (every reference is a Healthy dependency); an explicit `depends_on` can add
+// more or set conditions.
+type Dependency struct {
+	Name      string
+	Condition Condition
+}
+
 // Dep is a resolved dependency the runtime hands to a dependent instance's
 // driver: another instance that has been booted and is held running.
 type Dep struct {
