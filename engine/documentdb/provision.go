@@ -64,9 +64,13 @@ func bundledTemplate(tc engine.Toolchain) string {
 	return ""
 }
 
-// cloneTree recursively copies the template cluster at src into dst, preserving
-// file modes (Postgres insists PGDATA is 0700) and symlinks. dst is a fresh data
-// dir, which provision guarantees (it only clones when PG_VERSION is absent).
+// cloneTree recursively copies the template cluster at src into dst. Every
+// directory is created 0700: Postgres refuses to start unless its data dir is
+// private, and the bundled template's own perms can't be trusted — doze's archive
+// extractor normalizes directories to 0755, which Postgres rejects. Files keep
+// their mode (the template ships them 0600) and symlinks are recreated. dst is a
+// fresh data dir, which provision guarantees (it only clones when PG_VERSION is
+// absent).
 func cloneTree(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -83,7 +87,7 @@ func cloneTree(src, dst string) error {
 		}
 		switch {
 		case d.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm())
+			return os.MkdirAll(target, 0o700)
 		case info.Mode()&fs.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
