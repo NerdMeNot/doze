@@ -11,7 +11,6 @@ import (
 	"github.com/spf13/cobra"
 
 	_ "github.com/nerdmenot/doze/engine/documentdb" // register the documentdb driver
-	_ "github.com/nerdmenot/doze/engine/ferretdb"   // register the ferretdb driver
 	_ "github.com/nerdmenot/doze/engine/kvrocks"    // register the kvrocks driver
 	"github.com/nerdmenot/doze/engine/postgres"
 	"github.com/nerdmenot/doze/engine/s3"
