@@ -48,6 +48,30 @@ func TestReapableOnlyAfterTimeout(t *testing.T) {
 	}
 }
 
+func TestKeepAwakeExemptsFromReaper(t *testing.T) {
+	now := time.Now()
+	r := New()
+	r.now = func() time.Time { return now }
+	r.MarkRunning("db", "/sock", 5432, 100)
+	now = now.Add(2 * time.Minute) // aged past the timeout
+
+	if got := r.Reapable(time.Minute); len(got) != 1 {
+		t.Fatalf("idle past timeout should be reapable, got %v", got)
+	}
+	if !r.ToggleKeepAwake("db") {
+		t.Fatal("toggle should report kept-awake (true)")
+	}
+	if got := r.Reapable(time.Minute); len(got) != 0 {
+		t.Fatalf("a kept-awake db must never be reaped, got %v", got)
+	}
+	if r.ToggleKeepAwake("db") {
+		t.Fatal("toggle should report auto-sleep restored (false)")
+	}
+	if got := r.Reapable(time.Minute); len(got) != 1 {
+		t.Fatalf("after un-pinning it should be reapable again, got %v", got)
+	}
+}
+
 func TestReapableNotWhenConnected(t *testing.T) {
 	now := time.Now()
 	r := New()

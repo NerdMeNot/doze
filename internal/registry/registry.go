@@ -47,6 +47,10 @@ type Instance struct {
 	// LastError holds the most recent boot/convergence/crash failure, surfaced in
 	// status and the TUI. Cleared on a new boot attempt and on success.
 	LastError string
+	// KeepAwake exempts the instance from the idle reaper — a per-instance "pin"
+	// toggled live from the dashboard. It persists across state changes (e.g. for a
+	// slow-booting engine you want to keep warm).
+	KeepAwake bool
 }
 
 // Registry is a concurrency-safe map of database name -> Instance.
@@ -160,6 +164,9 @@ func (r *Registry) Reapable(idleTimeout time.Duration) []string {
 	defer r.mu.Unlock()
 	var out []string
 	for name, inst := range r.m {
+		if inst.KeepAwake {
+			continue // pinned: exempt from the idle reaper
+		}
 		if inst.State == Idle && inst.Conns == 0 && !inst.IdleSince.IsZero() {
 			if r.now().Sub(inst.IdleSince) >= idleTimeout {
 				out = append(out, name)
@@ -168,6 +175,16 @@ func (r *Registry) Reapable(idleTimeout time.Duration) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// ToggleKeepAwake flips the idle-reaper exemption for an instance and returns the
+// new value, creating a Reaped placeholder if it isn't tracked yet.
+func (r *Registry) ToggleKeepAwake(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inst := r.ensure(name)
+	inst.KeepAwake = !inst.KeepAwake
+	return inst.KeepAwake
 }
 
 // Snapshot returns copies of all tracked instances, sorted by name.

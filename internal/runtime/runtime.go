@@ -234,6 +234,10 @@ func (r *Runtime) bootLocked(ctx context.Context, name string) (engine.Endpoint,
 	return inst.Endpoint, nil
 }
 
+// ToggleKeepAwake flips an instance's idle-reaper exemption and returns the new
+// value, so a slow-booting engine can be pinned awake from the dashboard.
+func (r *Runtime) ToggleKeepAwake(name string) bool { return r.reg.ToggleKeepAwake(name) }
+
 // bootDeps boots and holds (via Acquire) every instance the named instance
 // depends on, returning the resolved deps and the list of held names. On any
 // failure it releases the deps it already held.

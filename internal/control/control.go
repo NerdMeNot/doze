@@ -38,6 +38,7 @@ type InstanceView struct {
 	DataDir   string    `json:"data_dir,omitempty"`   // where this instance's data is written
 	LastError string    `json:"last_error,omitempty"` // most recent boot/crash failure
 	Declared  bool      `json:"declared"`
+	KeepAwake bool      `json:"keep_awake,omitempty"` // pinned: exempt from the idle reaper
 }
 
 // Response is the daemon's reply.
@@ -58,6 +59,7 @@ type Handler interface {
 	Boot(ctx context.Context, db string) error
 	Restart(ctx context.Context, db string) error
 	Logs(db string) ([]string, error)
+	KeepAwake(db string) error // toggle the idle-reaper exemption for db
 }
 
 // Server listens on a unix socket and dispatches requests to a Handler.
@@ -139,6 +141,12 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.OK = true
 			resp.Lines = lines
 		}
+	case "keepawake":
+		if err := s.h.KeepAwake(req.DB); err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.OK = true
+		}
 	default:
 		resp.Error = "unknown op: " + req.Op
 	}
@@ -158,6 +166,7 @@ func ViewFromRegistry(inst registry.Instance, engineType, version string, declar
 		IdleSince: inst.IdleSince,
 		LastError: inst.LastError,
 		Declared:  declared,
+		KeepAwake: inst.KeepAwake,
 	}
 }
 

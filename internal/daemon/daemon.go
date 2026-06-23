@@ -231,6 +231,14 @@ func (h *handler) Down(ctx context.Context, name string) error {
 	return h.d.rt.Stop(ctx, name)
 }
 
+func (h *handler) KeepAwake(name string) error {
+	if name == "" {
+		return fmt.Errorf("keepawake needs an instance name")
+	}
+	h.d.rt.ToggleKeepAwake(name)
+	return nil
+}
+
 func (h *handler) Logs(name string) ([]string, error) {
 	p := h.d.rt.Backend(name)
 	if p == nil {
