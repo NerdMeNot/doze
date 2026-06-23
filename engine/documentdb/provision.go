@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,13 +21,28 @@ func provisioned(dataDir string) bool {
 
 // provision initializes the private Postgres cluster if needed and (re)writes
 // the DocumentDB-required configuration. Idempotent.
+//
+// First boot is the slow part of DocumentDB: a from-scratch initdb plus
+// CREATE EXTENSION documentdb CASCADE (pulling in PostGIS, pg_cron, pgvector,
+// RUM, …) takes tens of seconds. doze-binaries does that work once at build time
+// and ships the resulting cluster as a template, so here we just clone it — a
+// local file copy of a second or two. Builds without a bundled template (e.g. a
+// hand-pointed bindir) fall back to running initdb at runtime; either way
+// Spawn's idempotent CREATE EXTENSION IF NOT EXISTS finishes the job.
 func provision(ctx context.Context, inst engine.Instance, tc engine.Toolchain) error {
 	pgData := pgDataDir(inst.DataDir)
 	if _, err := os.Stat(filepath.Join(pgData, "PG_VERSION")); err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		if err := initdb(ctx, inst, tc, pgData); err != nil {
+		if err := os.MkdirAll(filepath.Dir(pgData), 0o700); err != nil {
+			return err
+		}
+		if tmpl := bundledTemplate(tc); tmpl != "" {
+			if err := cloneTree(tmpl, pgData); err != nil {
+				return fmt.Errorf("cloning documentdb template for %q: %w", inst.Name, err)
+			}
+		} else if err := initdb(ctx, inst, tc, pgData); err != nil {
 			return err
 		}
 	}
@@ -33,6 +50,67 @@ func provision(ctx context.Context, inst engine.Instance, tc engine.Toolchain) e
 		return err
 	}
 	return writeHBA(pgData)
+}
+
+// bundledTemplate returns the path to the pre-initialized cluster shipped in the
+// toolchain (initdb + CREATE EXTENSION … CASCADE done at build time), or "" when
+// this build carries none — in which case provision falls back to initdb. The
+// template lives beside the binaries at <prefix>/share/documentdb-template.
+func bundledTemplate(tc engine.Toolchain) string {
+	dir := filepath.Join(filepath.Dir(tc.BinDir), "share", "documentdb-template")
+	if fi, err := os.Stat(filepath.Join(dir, "PG_VERSION")); err == nil && !fi.IsDir() {
+		return dir
+	}
+	return ""
+}
+
+// cloneTree recursively copies the template cluster at src into dst, preserving
+// file modes (Postgres insists PGDATA is 0700) and symlinks. dst is a fresh data
+// dir, which provision guarantees (it only clones when PG_VERSION is absent).
+func cloneTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, info.Mode().Perm())
+		case info.Mode()&fs.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		default:
+			return copyFile(path, target, info.Mode().Perm())
+		}
+	})
+}
+
+func copyFile(src, dst string, mode fs.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func initdb(ctx context.Context, inst engine.Instance, tc engine.Toolchain, pgData string) error {
