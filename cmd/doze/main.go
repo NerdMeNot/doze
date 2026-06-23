@@ -58,6 +58,7 @@ func rootCmd() *cobra.Command {
 		logsCmd(),
 		upCmd(),
 		downCmd(),
+		resetCmd(),
 		statusCmd(),
 		runCmd(),
 		envCmd(),
