@@ -117,11 +117,13 @@ a row with `↑/↓`, then: `b` boot · `d` reap · `R` restart · `f` toggle lo
 the logs pane; drag across log lines (or `c` for keyboard copy mode) to copy to
 the clipboard. For piping, `doze logs <instance>` prints to stdout instead.
 
-For a running built-in (`s3`/`sqs`/`sns`), `a` opens a **manage** panel listing its
+For a running built-in (`s3`/`sqs`/`sns`), `a` opens a **command console** listing its
 resources with live status — queue depth/in-flight, bucket object count/size, topic
-subscriptions — and the data actions its engine offers: SQS `peek`/`send`/`purge`,
-S3 `browse`/`empty`, SNS `publish`/`subscriptions`. Destructive actions prompt for
-confirmation; `send`/`publish` prompt for the message body.
+subscriptions — and the data actions its engine offers: SQS
+`peek`/`send`/`purge`/`redrive` (move a dead-letter queue's messages back to its
+source), S3 `browse`/`empty`, SNS `publish`/`subscriptions`. You drive it as a
+small command console — type `<action> <resource> [input]` (e.g. `send emails hi`,
+`redrive emails-dlq`) with Tab completion over actions then resource names.
 
 ### `doze logs [instance] [-f]`
 With no argument, tail the daemon's log. With an instance, show that backend's
