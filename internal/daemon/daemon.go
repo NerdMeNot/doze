@@ -145,8 +145,16 @@ type handler struct{ d *Daemon }
 func (h *handler) Status() control.Response {
 	resp := control.Response{Listen: h.d.cfg.Listen, IdleTimeout: h.d.cfg.Defaults.IdleTimeout}
 	eps := h.endpointsByName()
+	snapshot := h.d.rt.Registry().Snapshot()
+	pids := make([]int, 0, len(snapshot))
+	for _, inst := range snapshot {
+		if inst.PID != 0 {
+			pids = append(pids, inst.PID)
+		}
+	}
+	stats := ui.ProcStats(pids) // one ps for every running backend (+ its subtree)
 	seen := map[string]bool{}
-	for _, inst := range h.d.rt.Registry().Snapshot() {
+	for _, inst := range snapshot {
 		engineType, version, declared := "", "", false
 		if decl := h.d.cfg.Lookup(inst.Name); decl != nil {
 			engineType, version, declared = decl.Type, decl.Version.String(), true
@@ -154,8 +162,8 @@ func (h *handler) Status() control.Response {
 		v := control.ViewFromRegistry(inst, engineType, version, declared)
 		hydrateEndpoint(&v, eps[inst.Name])
 		v.DataDir = h.dataDir(inst.Name)
-		if inst.PID != 0 {
-			v.RAM, v.CPU = ui.ProcSample(inst.PID)
+		if st, ok := stats[inst.PID]; ok {
+			v.RAM, v.CPU = st.RSS, st.CPU
 		}
 		resp.Instances = append(resp.Instances, v)
 		seen[inst.Name] = true

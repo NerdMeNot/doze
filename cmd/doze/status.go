@@ -105,6 +105,13 @@ func renderTable(views []control.InstanceView) {
 	header := []string{"NAME", "ENGINE", "VERSION", "STATE", "CONNS", "CPU", "RAM", "UPTIME", "ENDPOINT", "PID"}
 	var rows [][]string
 	var failed []control.InstanceView
+	pids := make([]int, 0, len(views))
+	for _, v := range views {
+		if v.PID != 0 {
+			pids = append(pids, v.PID)
+		}
+	}
+	stats := ui.ProcStats(pids)
 	for _, v := range views {
 		state := v.State
 		flagged := false
@@ -124,8 +131,8 @@ func renderTable(views []control.InstanceView) {
 		pid, ram, cpu := "", "", ""
 		if v.PID != 0 {
 			pid = strconv.Itoa(v.PID)
-			rss, pct := ui.ProcSample(v.PID)
-			ram, cpu = ui.HumanBytes(rss), ui.CPUStr(pct)
+			st := stats[v.PID]
+			ram, cpu = ui.HumanBytes(st.RSS), ui.CPUStr(st.CPU)
 		}
 		rows = append(rows, []string{
 			v.Name, v.Engine, v.Version, ui.State(state),
