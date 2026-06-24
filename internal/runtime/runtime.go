@@ -40,9 +40,10 @@ type Runtime struct {
 	reg   *registry.Registry
 	group singleflight.Group
 
-	mu    sync.Mutex
-	procs map[string]engine.Process
-	deps  map[string][]string // instance -> dependency names it holds running
+	mu       sync.Mutex
+	procs    map[string]engine.Process
+	deps     map[string][]string      // instance -> dependency names it holds running
+	restarts map[string]*restartEntry // pending supervised restarts, cancellable by Stop/shutdown
 
 	statePath string // .doze/state.json for apply/destroy object tracking
 
@@ -67,6 +68,7 @@ func New(cfg *config.Config) (*Runtime, error) {
 		reg:       registry.New(),
 		procs:     map[string]engine.Process{},
 		deps:      map[string][]string{},
+		restarts:  map[string]*restartEntry{},
 		statePath: state.Path(cfg.Path()),
 		logf:      func(string, ...any) {},
 	}
@@ -395,12 +397,18 @@ func (r *Runtime) Stop(ctx context.Context, name string) error {
 	delete(r.procs, name)
 	held := r.deps[name]
 	delete(r.deps, name)
+	if e := r.restarts[name]; e != nil { // cancel any pending restart
+		e.cancel()
+		delete(r.restarts, name)
+	}
 	r.mu.Unlock()
+	// An intentional stop clears the restart budget unconditionally — even when the
+	// process already crashed and a restart was pending — so `down`/shutdown can
+	// never be silently undone by a respawn.
+	r.reg.ResetRestart(name)
 	if p == nil && len(held) == 0 {
 		return nil
 	}
-	// An intentional stop clears the restart budget, so a later `up` starts fresh.
-	r.reg.ResetRestart(name)
 	var err error
 	if p != nil {
 		r.logf("reaping %q…", name)
@@ -434,6 +442,13 @@ func (r *Runtime) Stop(ctx context.Context, name string) error {
 // a dead socket.
 func (r *Runtime) watch(name string, proc engine.Process) {
 	exitErr := proc.Wait()
+	// Uptime is captured before MarkReaped clears StartedAt: a process that ran
+	// past the stability window counts as recovered, so its restart budget resets —
+	// the budget bounds rapid crash loops, not isolated crashes over a long life.
+	var uptime time.Duration
+	if inst, ok := r.reg.Get(name); ok && !inst.StartedAt.IsZero() {
+		uptime = time.Since(inst.StartedAt)
+	}
 	r.mu.Lock()
 	if r.procs[name] != proc {
 		r.mu.Unlock() // intentionally stopped/replaced; nothing to do
@@ -451,17 +466,15 @@ func (r *Runtime) watch(name string, proc engine.Process) {
 
 	// A supervised process may restart per its policy instead of staying down.
 	if spec, ok := r.restartSpec(name); ok && shouldRestart(spec.Policy, exitErr) {
+		if uptime >= restartStabilityWindow {
+			r.reg.ResetRestart(name) // recovered cleanly; only consecutive rapid crashes count
+		}
 		count := r.reg.IncRestart(name)
 		if count <= spec.MaxRetries {
 			delay := backoffFor(spec.Backoff, count)
 			r.reg.SetError(name, fmt.Sprintf("exited; restarting (%d/%d) in %s", count, spec.MaxRetries, delay))
 			r.logf("process %q exited; restarting (%d/%d) in %s", name, count, spec.MaxRetries, delay)
-			go func() {
-				time.Sleep(delay)
-				if _, err := r.Boot(context.Background(), name); err != nil {
-					r.logf("restart of %q failed: %v", name, err)
-				}
-			}()
+			r.scheduleRestart(name, delay)
 			return
 		}
 		r.reg.SetError(name, fmt.Sprintf("exited; gave up after %d restarts", spec.MaxRetries))
@@ -471,6 +484,49 @@ func (r *Runtime) watch(name string, proc engine.Process) {
 
 	r.reg.SetError(name, "backend exited unexpectedly")
 	r.logf("backend %q exited unexpectedly; it will re-boot on the next connection", name)
+}
+
+// restartStabilityWindow is how long a restarted process must stay up before a
+// later crash is treated as isolated (resetting the restart budget) rather than
+// part of a rapid crash loop.
+const restartStabilityWindow = 60 * time.Second
+
+// restartEntry tracks a pending supervised restart so it can be cancelled (and
+// identified by pointer — context.CancelFunc values are not comparable).
+type restartEntry struct{ cancel context.CancelFunc }
+
+// scheduleRestart boots name after delay, unless the pending restart is cancelled
+// first by an intentional Stop or by daemon shutdown — so a restart can never
+// respawn an instance the user stopped, nor a Boot outlive the daemon.
+func (r *Runtime) scheduleRestart(name string, delay time.Duration) {
+	rctx, cancel := context.WithCancel(context.Background())
+	entry := &restartEntry{cancel: cancel}
+	r.mu.Lock()
+	if old := r.restarts[name]; old != nil {
+		old.cancel() // supersede any earlier pending restart for this name
+	}
+	r.restarts[name] = entry
+	r.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-rctx.Done():
+			return // cancelled by Stop/StopAll
+		}
+		r.mu.Lock()
+		if r.restarts[name] != entry { // superseded or cancelled in the race window
+			r.mu.Unlock()
+			return
+		}
+		delete(r.restarts, name)
+		r.mu.Unlock()
+		if _, err := r.Boot(rctx, name); err != nil {
+			r.logf("restart of %q failed: %v", name, err)
+		}
+	}()
 }
 
 // restartSpec returns the restart policy for an instance whose driver is
@@ -587,9 +643,19 @@ func (r *Runtime) Reconcile() {
 // StopAll reaps every running backend.
 func (r *Runtime) StopAll(ctx context.Context) {
 	r.mu.Lock()
-	names := make([]string, 0, len(r.procs))
+	seen := map[string]bool{}
+	names := make([]string, 0, len(r.procs)+len(r.restarts))
 	for n := range r.procs {
-		names = append(names, n)
+		if !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	for n := range r.restarts { // include instances with only a pending restart
+		if !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
 	}
 	r.mu.Unlock()
 	for _, n := range names {
@@ -719,7 +785,12 @@ func (r *Runtime) probeHealthOnce(ctx context.Context) {
 		if !r.isSupervised(drv, ei) {
 			continue
 		}
-		r.reg.SetHealthy(inst.Name, hc.CheckHealth(ctx, ei) == nil)
+		// Bound each probe so one wedged instance can't stall health updates for
+		// the rest (the loop is serial).
+		hctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		healthy := hc.CheckHealth(hctx, ei) == nil
+		cancel()
+		r.reg.SetHealthy(inst.Name, healthy)
 	}
 }
 

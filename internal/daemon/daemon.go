@@ -281,11 +281,16 @@ func (h *handler) StreamLogs(ctx context.Context, names []string, emit func(cont
 		}
 	}
 	sent := map[string]int{}
+	last := map[string]engine.Process{} // last backend seen per name, to detect a restart by identity
 	flush := func() error {
 		for _, n := range names {
 			p := h.d.rt.Backend(n)
 			if p == nil {
 				continue
+			}
+			if last[n] != p { // first sighting, or a restart replaced the ring — stream from its start
+				sent[n] = 0
+				last[n] = p
 			}
 			ls, ok := p.(interface {
 				LogsSince(int) ([]string, int)
@@ -294,9 +299,6 @@ func (h *handler) StreamLogs(ctx context.Context, names []string, emit func(cont
 				continue
 			}
 			lines, cursor := ls.LogsSince(sent[n])
-			if cursor < sent[n] { // ring reset (process restarted) — resume from the start
-				lines, cursor = ls.LogsSince(0)
-			}
 			for _, line := range lines {
 				if err := emit(control.LogFrame{Instance: n, Line: line}); err != nil {
 					return err

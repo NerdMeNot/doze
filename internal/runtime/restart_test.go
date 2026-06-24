@@ -1,12 +1,78 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze/internal/registry"
 )
+
+// testRuntime is a minimal Runtime for exercising the restart-cancellation logic
+// without a real config/driver (Stop short-circuits before touching cfg when there
+// is no live process or held dep).
+func testRuntime() *Runtime {
+	return &Runtime{
+		reg:      registry.New(),
+		procs:    map[string]engine.Process{},
+		deps:     map[string][]string{},
+		restarts: map[string]*restartEntry{},
+		logf:     func(string, ...any) {},
+	}
+}
+
+func (r *Runtime) pendingRestart(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.restarts[name]
+	return ok
+}
+
+// An intentional Stop during a restart backoff window must cancel the pending
+// restart — never respawn an instance the user stopped (the zombie-respawn bug).
+func TestStopCancelsPendingRestart(t *testing.T) {
+	r := testRuntime()
+	r.scheduleRestart("api", time.Hour) // far enough out that it never fires
+	if !r.pendingRestart("api") {
+		t.Fatal("expected a pending restart after scheduleRestart")
+	}
+	if err := r.Stop(context.Background(), "api"); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if r.pendingRestart("api") {
+		t.Fatal("Stop must cancel the pending restart")
+	}
+	if got := r.reg.Snapshot(); len(got) == 1 && got[0].RestartCount != 0 {
+		t.Errorf("Stop must reset the restart budget, got count=%d", got[0].RestartCount)
+	}
+}
+
+// Daemon shutdown (StopAll) must cancel a restart pending for an instance that has
+// no live process — otherwise a context.Background() boot outlives the daemon.
+func TestStopAllCancelsPendingRestart(t *testing.T) {
+	r := testRuntime()
+	r.scheduleRestart("api", time.Hour)
+	r.StopAll(context.Background())
+	if r.pendingRestart("api") {
+		t.Fatal("StopAll must cancel pending restarts (no leaked respawn past shutdown)")
+	}
+}
+
+// A second scheduleRestart for the same instance supersedes the first.
+func TestScheduleRestartSupersedes(t *testing.T) {
+	r := testRuntime()
+	r.scheduleRestart("api", time.Hour)
+	r.scheduleRestart("api", time.Hour)
+	if !r.pendingRestart("api") {
+		t.Fatal("expected exactly one pending restart")
+	}
+	r.Stop(context.Background(), "api")
+	if r.pendingRestart("api") {
+		t.Fatal("Stop must clear the superseding restart too")
+	}
+}
 
 func TestShouldRestart(t *testing.T) {
 	cases := []struct {

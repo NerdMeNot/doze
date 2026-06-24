@@ -83,10 +83,18 @@ func runUp(cfg *config.Config, targets []string, detach bool) error {
 		return nil
 	}
 
+	// Stream only the process targets, explicitly named: an empty Names list means
+	// "follow every instance" to the daemon, so guard against silently tailing the
+	// whole stack when the targets contain no processes (e.g. `doze up <db>`).
+	procs := processNames(cfg, targets)
+	if len(procs) == 0 {
+		fmt.Println(ui.Muted("targets are up; none are processes, so there are no logs to stream"))
+		return nil
+	}
 	fmt.Println(ui.Muted("streaming logs — press Ctrl-C to stop"))
 	streamErr := make(chan error, 1)
 	go func() {
-		streamErr <- client.Stream(ctx, control.Request{Op: "logs", Follow: true, Names: processNames(cfg, targets)}, printLogLine)
+		streamErr <- client.Stream(ctx, control.Request{Op: "logs", Follow: true, Names: procs}, printLogLine)
 	}()
 
 	select {
