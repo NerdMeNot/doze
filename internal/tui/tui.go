@@ -174,7 +174,40 @@ type (
 		verb, name string
 		err        error
 	}
+	resourcesMsg struct {
+		name string
+		res  []control.ResourceView
+		acts []control.ActionView
+		err  error
+	}
+	adminResultMsg struct {
+		action, resource, result string
+		err                      error
+	}
 )
+
+// cmdLine is one entry in the console scrollback. Text is stored unstyled so it
+// can be width-truncated safely at render time; kind selects the color.
+type cmdLine struct {
+	text string
+	kind int // cmdEcho | cmdOK | cmdErr | cmdPlain
+}
+
+const (
+	cmdPlain = iota
+	cmdEcho
+	cmdOK
+	cmdErr
+)
+
+// builtinAdmin reports whether an engine exposes dash-manageable resources.
+func builtinAdmin(eng string) bool {
+	switch eng {
+	case "s3", "sqs", "sns":
+		return true
+	}
+	return false
+}
 
 func tick() tea.Cmd     { return tea.Tick(refreshMS, func(t time.Time) tea.Msg { return tickMsg(t) }) }
 func logsTick() tea.Cmd { return tea.Tick(logsMS, func(t time.Time) tea.Msg { return logsTickMsg(t) }) }
@@ -198,6 +231,20 @@ func do(c *control.Client, verb, name string) tea.Cmd {
 	return func() tea.Msg {
 		_, err := c.Do(control.Request{Op: verb, DB: name})
 		return actionMsg{verb: verb, name: name, err: err}
+	}
+}
+
+func fetchResources(c *control.Client, name string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := c.Do(control.Request{Op: "resources", DB: name})
+		return resourcesMsg{name: name, res: resp.Resources, acts: resp.Actions, err: err}
+	}
+}
+
+func runAdmin(c *control.Client, name, action, resource, input string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := c.Do(control.Request{Op: "admin", DB: name, Action: action, Resource: resource, Input: input})
+		return adminResultMsg{action: action, resource: resource, result: resp.Result, err: err}
 	}
 }
 
@@ -230,6 +277,21 @@ type model struct {
 	filter    textinput.Model
 	showHelp  bool
 
+	// admin console: a builtin instance's sub-resources (queues/buckets/topics) and
+	// an in-dash command line for running data ops against them. adminRes is cached
+	// for the selected builtin (drives the detail hint) and the console lists it for
+	// context. Commands are "<action> <resource> [input]" with Tab completion over
+	// the engine's actions, then the instance's resource names.
+	adminMode bool
+	adminName string // instance adminRes/console belong to
+	adminRes  []control.ResourceView
+	adminActs []control.ActionView
+	adminErr  string // resource-fetch error (shown in the console header)
+
+	cmd      textinput.Model
+	cmdOut   []cmdLine // REPL scrollback (command echoes + results)
+	cmdCycle int       // Tab-completion cycle index for the current token
+
 	hist       map[string]*history
 	frame      int
 	flash      string
@@ -250,10 +312,14 @@ func Run(socketPath string) error {
 	fi.Prompt = "/"
 	fi.Placeholder = "filter"
 	fi.CharLimit = 32
+	ci := textinput.New()
+	ci.Prompt = "❯ "
+	ci.CharLimit = 512
 	m := model{
 		client: c,
 		follow: true,
 		filter: fi,
+		cmd:    ci,
 		hist:   map[string]*history{},
 		logVP:  viewport.New(0, 0),
 	}
@@ -331,7 +397,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(refresh(m.client), tick())
+		cmds := []tea.Cmd{refresh(m.client), tick()}
+		if m.adminMode && m.adminName != "" { // keep depths/counts live while managing
+			cmds = append(cmds, fetchResources(m.client, m.adminName))
+		}
+		return m, tea.Batch(cmds...)
 
 	case spinMsg:
 		m.frame++
@@ -392,6 +462,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFlash(stGreen.Render("✓ " + msg.verb + " " + msg.name))
 		}
 		return m, refresh(m.client)
+
+	case resourcesMsg:
+		// Only adopt resources for the instance we're currently focused on.
+		if v, ok := m.selected(); ok && msg.name == v.Name {
+			m.adminName = msg.name
+			if msg.err != nil {
+				m.adminErr = msg.err.Error()
+			} else {
+				m.adminErr, m.adminRes, m.adminActs = "", msg.res, msg.acts
+			}
+		}
+		return m, nil
+
+	case adminResultMsg:
+		if msg.err != nil {
+			m.pushOut(cmdLine{"✕ " + msg.err.Error(), cmdErr})
+			m.setFlash(stErr.Render("✗ " + msg.action + " " + msg.resource))
+		} else {
+			for i, ln := range strings.Split(msg.result, "\n") {
+				kind := cmdPlain
+				if i == 0 { // the engine's headline result line ("purged emails")
+					kind = cmdOK
+				}
+				m.pushOut(cmdLine{ln, kind})
+			}
+			m.setFlash(stGreen.Render("✓ " + msg.action + " " + msg.resource))
+		}
+		if m.adminName != "" { // refresh the status lines after a mutation
+			return m, fetchResources(m.client, m.adminName)
+		}
+		return m, nil
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
@@ -581,6 +682,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.copyMode {
 		return m.handleCopyKey(msg)
 	}
+	if m.adminMode {
+		return m.handleAdminKey(msg)
+	}
 	if m.filtering {
 		switch msg.String() {
 		case "enter", "esc":
@@ -676,9 +780,198 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.setFlash(stAccent.Render("▲ keeping " + v.Name + " awake"))
 			}
 			return m, refresh(m.client)
+		case "a": // open the in-dash command console for a running builtin
+			if !builtinAdmin(v.Engine) {
+				return m, nil
+			}
+			if v.PID == 0 {
+				m.setFlash(stDim.Render("boot " + v.Name + " first to open its console"))
+				return m, nil
+			}
+			m.adminMode, m.adminErr, m.cmdCycle = true, "", 0
+			m.cmd.SetValue("")
+			m.cmd.Placeholder = "<action> <resource> [input] — tab completes"
+			return m, tea.Batch(fetchResources(m.client, v.Name), m.cmd.Focus())
 		}
 	}
 	return m, nil
+}
+
+// handleAdminKey drives the console: Esc closes, Enter runs the typed command,
+// Tab completes the current token, PgUp/PgDn scroll back; everything else edits
+// the command line.
+func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.adminMode = false
+		m.cmd.Blur()
+		m.cmd.SetValue("")
+		return m, nil
+	case "enter":
+		return m.runCommand()
+	case "tab":
+		m.complete()
+		return m, nil
+	case "ctrl+l": // clear the scrollback
+		m.cmdOut = nil
+		return m, nil
+	}
+	m.cmdCycle = 0 // any edit invalidates the completion cycle
+	var cmd tea.Cmd
+	m.cmd, cmd = m.cmd.Update(msg)
+	return m, cmd
+}
+
+// runCommand parses "<action> <resource> [input]", validates it against the
+// instance's actions and resources, echoes it to the scrollback, and dispatches.
+func (m model) runCommand() (tea.Model, tea.Cmd) {
+	raw := strings.TrimSpace(m.cmd.Value())
+	if raw == "" {
+		return m, nil
+	}
+	m.pushOut(cmdLine{"❯ " + raw, cmdEcho})
+	m.cmd.SetValue("")
+	m.cmdCycle = 0
+
+	fields := strings.SplitN(raw, " ", 3)
+	action := fields[0]
+	if !m.hasAction(action) {
+		m.pushOut(cmdLine{"unknown action — try: " + strings.Join(m.actionIDs(), ", "), cmdErr})
+		return m, nil
+	}
+	if len(fields) < 2 {
+		m.pushOut(cmdLine{"usage: " + m.actionUsage(action), cmdErr})
+		return m, nil
+	}
+	resource := fields[1]
+	if !m.hasResource(resource) {
+		m.pushOut(cmdLine{fmt.Sprintf("no such resource %q — have: %s", resource, strings.Join(m.resourceNames(), ", ")), cmdErr})
+		return m, nil
+	}
+	input := ""
+	if len(fields) == 3 {
+		input = fields[2]
+	}
+	if m.needsInput(action) && strings.TrimSpace(input) == "" {
+		m.pushOut(cmdLine{"usage: " + m.actionUsage(action), cmdErr})
+		return m, nil
+	}
+	return m, runAdmin(m.client, m.adminName, action, resource, input)
+}
+
+// complete advances Tab-completion for the token under the cursor: actions for
+// the first word, resource names for the second. Repeated Tab cycles candidates.
+func (m *model) complete() {
+	val := m.cmd.Value()
+	fields := strings.Fields(val)
+	endsSpace := strings.HasSuffix(val, " ")
+
+	var cands []string
+	var rebuild func(pick string)
+	switch {
+	case len(fields) == 0 || (len(fields) == 1 && !endsSpace): // completing the action
+		prefix := ""
+		if len(fields) == 1 {
+			prefix = fields[0]
+		}
+		cands = prefixFilter(m.actionIDs(), prefix)
+		rebuild = func(pick string) { m.cmd.SetValue(pick + " ") }
+	case (len(fields) == 1 && endsSpace) || (len(fields) == 2 && !endsSpace): // completing the resource
+		action, prefix := fields[0], ""
+		if len(fields) == 2 {
+			prefix = fields[1]
+		}
+		cands = prefixFilter(m.resourceNames(), prefix)
+		rebuild = func(pick string) { m.cmd.SetValue(action + " " + pick + " ") }
+	default:
+		return // typing free-form input — nothing to complete
+	}
+	if len(cands) == 0 {
+		return
+	}
+	rebuild(cands[m.cmdCycle%len(cands)])
+	m.cmdCycle++
+	m.cmd.CursorEnd()
+}
+
+// pushOut appends a line to the console scrollback, bounding its length.
+func (m *model) pushOut(l cmdLine) {
+	m.cmdOut = append(m.cmdOut, l)
+	if len(m.cmdOut) > 500 {
+		m.cmdOut = m.cmdOut[len(m.cmdOut)-500:]
+	}
+}
+
+// ── console command vocabulary (from the instance's actions/resources) ──────
+func (m model) actionIDs() []string {
+	ids := make([]string, 0, len(m.adminActs))
+	for _, a := range m.adminActs {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
+func (m model) resourceNames() []string {
+	ns := make([]string, 0, len(m.adminRes))
+	for _, r := range m.adminRes {
+		ns = append(ns, r.Name)
+	}
+	return ns
+}
+
+func (m model) hasAction(id string) bool {
+	for _, a := range m.adminActs {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) hasResource(name string) bool {
+	for _, r := range m.adminRes {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) needsInput(id string) bool {
+	for _, a := range m.adminActs {
+		if a.ID == id {
+			return a.InputHint != ""
+		}
+	}
+	return false
+}
+
+// actionUsage describes a command's grammar, e.g. "send <queue> <message body>".
+func (m model) actionUsage(id string) string {
+	for _, a := range m.adminActs {
+		u := a.ID + " <" + a.Kind + ">"
+		if a.ID == id {
+			if a.InputHint != "" {
+				u += " <" + a.InputHint + ">"
+			}
+			return u
+		}
+	}
+	return id
+}
+
+// prefixFilter keeps the candidates that start with prefix (all when empty).
+func prefixFilter(cands []string, prefix string) []string {
+	if prefix == "" {
+		return cands
+	}
+	var out []string
+	for _, c := range cands {
+		if strings.HasPrefix(c, prefix) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // ── word-precise selection over the frozen logs ─────────────────────────────
@@ -915,14 +1208,23 @@ func (m *model) refreshCopyView() {
 	m.logVP.SetYOffset(max(0, off))
 }
 
-// onSelect refetches logs immediately when the selection moves.
+// onSelect refetches logs immediately when the selection moves, and (for a
+// running builtin) its resources so the detail hint and admin panel are ready.
 func (m *model) onSelect() tea.Cmd {
 	m.logVP.SetContent("")
 	m.logErr = ""
-	if v, ok := m.selected(); ok && v.PID != 0 {
-		return fetchLogs(m.client, v.Name)
+	// Moving off the previous instance invalidates its cached resources/console.
+	m.adminRes, m.adminActs, m.adminName, m.adminErr = nil, nil, "", ""
+	m.cmdOut, m.cmdCycle = nil, 0
+	v, ok := m.selected()
+	if !ok || v.PID == 0 {
+		return nil
 	}
-	return nil
+	cmds := []tea.Cmd{fetchLogs(m.client, v.Name)}
+	if builtinAdmin(v.Engine) {
+		cmds = append(cmds, fetchResources(m.client, v.Name))
+	}
+	return tea.Batch(cmds...)
 }
 
 // viewHelp is the centered keybinding overlay (toggled with `?`). It also
@@ -943,6 +1245,7 @@ func (m model) viewHelp() string {
 		k("d", "reap — sleep, keeps data"),
 		k("R", "restart"),
 		k("p", "keep awake (no auto-sleep)"),
+		k("a", "console (s3/sqs/sns)"),
 	}, "\n")
 	col2 := strings.Join([]string{
 		sec("Logs"),
@@ -976,6 +1279,132 @@ func (m model) viewHelp() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
+// viewAdmin is the centered, interactive panel for managing a builtin's
+// sub-resources: the resource list (with live status), the last action's output,
+// and a context footer (actions / a confirm prompt / an input field).
+func (m model) viewAdmin() string {
+	w := clampi(m.width-12, 50, 92)
+	rule := stFaint.Render(strings.Repeat("─", w))
+	thin := stFaint.Render(strings.Repeat("╌", w))
+	var b strings.Builder
+
+	title := stTitle.Render("◆ " + m.adminName)
+	if v, ok := m.selected(); ok {
+		title += stDim.Render("  " + v.Engine + " console")
+	}
+	b.WriteString(title + "\n" + rule + "\n")
+
+	// Resources (read-only context: what you can name in a command).
+	switch {
+	case m.adminErr != "" && len(m.adminRes) == 0:
+		b.WriteString(stErr.Render("✕ "+truncate(m.adminErr, w)) + "\n")
+	case len(m.adminRes) == 0:
+		b.WriteString(stDim.Render("  (no resources declared)") + "\n")
+	default:
+		for _, r := range m.adminRes {
+			nm := truncate(r.Name, 24)
+			gap := max(1, 26-lipgloss.Width(nm))
+			b.WriteString("  " + stText.Render(nm) + strings.Repeat(" ", gap) +
+				stDim.Render(truncate(r.Status, w-30)) + "\n")
+		}
+	}
+
+	// The command grammar — spelled out so it's obvious what to type.
+	if usage := m.actionsReference(); usage != "" {
+		b.WriteString(thin + "\n" + usage + "\n")
+	}
+
+	// Scrollback: command echoes + results.
+	b.WriteString(rule + "\n")
+	outCap := clampi(m.height-16-len(m.adminRes), 3, 16)
+	if len(m.cmdOut) == 0 {
+		hint := "(no output yet"
+		if names := m.resourceNames(); len(names) > 0 && len(m.adminActs) > 0 {
+			hint += " — try `" + m.adminActs[0].ID + " " + names[0] + "`"
+		}
+		b.WriteString(stFaint.Render(hint+")") + "\n")
+	} else {
+		start := max(0, len(m.cmdOut)-outCap)
+		if start > 0 {
+			b.WriteString(stFaint.Render(fmt.Sprintf("  … %d earlier line(s)", start)) + "\n")
+		}
+		for _, l := range m.cmdOut[start:] {
+			b.WriteString(cmdLineStyle(l.kind).Render(truncate(l.text, w)) + "\n")
+		}
+	}
+
+	// The command line + live completion hint.
+	b.WriteString(rule + "\n" + m.cmd.View() + "\n")
+	if cands := m.cmdCandidates(); len(cands) > 0 {
+		if len(cands) > 8 {
+			cands = cands[:8]
+		}
+		b.WriteString(stFaint.Render("↹ ") + stDim.Render(strings.Join(cands, "  ")) + "\n")
+	} else {
+		b.WriteString("\n")
+	}
+	b.WriteString(rule + "\n")
+	b.WriteString(stFaint.Render("tab complete · enter run · ctrl+l clear · esc close"))
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).BorderForeground(cAccent).
+		Padding(1, 3).Render(strings.TrimRight(b.String(), "\n"))
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// actionsReference renders the command grammar, e.g.
+// "peek <queue> · send <queue> <message body> · purge <queue>".
+func (m model) actionsReference() string {
+	if len(m.adminActs) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, a := range m.adminActs {
+		u := stAccent.Render(a.ID) + stDim.Render(" <"+a.Kind+">")
+		if a.InputHint != "" {
+			u += stDim.Render(" <" + a.InputHint + ">")
+		}
+		parts = append(parts, u)
+	}
+	return stLabel.Render("run  ") + strings.Join(parts, stFaint.Render("  ·  "))
+}
+
+// cmdCandidates returns the completion candidates for the token currently being
+// typed (actions for the first word, resource names for the second).
+func (m model) cmdCandidates() []string {
+	val := m.cmd.Value()
+	fields := strings.Fields(val)
+	endsSpace := strings.HasSuffix(val, " ")
+	switch {
+	case len(fields) == 0 || (len(fields) == 1 && !endsSpace):
+		prefix := ""
+		if len(fields) == 1 {
+			prefix = fields[0]
+		}
+		return prefixFilter(m.actionIDs(), prefix)
+	case (len(fields) == 1 && endsSpace) || (len(fields) == 2 && !endsSpace):
+		prefix := ""
+		if len(fields) == 2 {
+			prefix = fields[1]
+		}
+		return prefixFilter(m.resourceNames(), prefix)
+	}
+	return nil
+}
+
+func cmdLineStyle(kind int) lipgloss.Style {
+	switch kind {
+	case cmdEcho:
+		return stAccent
+	case cmdOK:
+		return stGreen
+	case cmdErr:
+		return stErr
+	default:
+		return stDim
+	}
+}
+
 func (m model) View() string {
 	if m.width == 0 {
 		mm := m
@@ -993,6 +1422,9 @@ func (m model) render() string {
 	}
 	if m.showHelp {
 		return m.viewHelp()
+	}
+	if m.adminMode {
+		return m.viewAdmin()
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, m.viewSidebar(), "  ", m.viewRight())
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewHeader(), body, m.viewFooter())
@@ -1269,6 +1701,19 @@ func (m model) viewDetail(v control.InstanceView, w int) string {
 		status = stDim.Render("· asleep — connect to wake it")
 	}
 
+	// For a running builtin, the connection count is less interesting than its
+	// resources — surface the count and the `a` affordance right on the status line.
+	if builtinAdmin(v.Engine) && v.PID != 0 {
+		hint := stFaint.Render("press ") + stAccent.Render("a") + stFaint.Render(" for console")
+		if m.adminName == v.Name && len(m.adminRes) > 0 {
+			kind := m.adminRes[0].Kind + "s"
+			status = stGreen.Render("● ") + stAccent.Render(fmt.Sprintf("%d %s", len(m.adminRes), kind)) +
+				stDim.Render(" · ") + hint
+		} else {
+			status = stGreen.Render("● serving") + stDim.Render(" · ") + hint
+		}
+	}
+
 	lines := []string{
 		title,
 		stFaint.Render(strings.Repeat("╌", max(1, w-6))),
@@ -1475,10 +1920,14 @@ func (m model) viewFooter() string {
 			toggle, motion, key("v", "select"), key("y", "copy"), key("esc", "exit"),
 		}, sep)
 	}
-	return strings.Join([]string{
-		key("↑↓", "select"), key("b", "boot"), key("d", "reap"), key("f", "follow"),
-		key("c", "copy"), key("/", "filter"), key("t", "theme"), key("?", "more"), key("q", "quit"),
-	}, sep)
+	parts := []string{key("↑↓", "select"), key("b", "boot"), key("d", "reap")}
+	if v, ok := m.selected(); ok && builtinAdmin(v.Engine) {
+		parts = append(parts, key("a", "console"))
+	}
+	parts = append(parts,
+		key("f", "follow"), key("c", "copy"), key("/", "filter"),
+		key("t", "theme"), key("?", "more"), key("q", "quit"))
+	return strings.Join(parts, sep)
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

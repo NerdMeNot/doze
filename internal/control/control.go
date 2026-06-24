@@ -19,6 +19,29 @@ import (
 type Request struct {
 	Op string `json:"op"`           // "status", "up", "down"
 	DB string `json:"db,omitempty"` // target database (empty = all, where meaningful)
+
+	// Admin (builtin data ops): "resources" lists a builtin's sub-resources;
+	// "admin" runs Action on Resource (with optional Input) — see engine.Admin.
+	Action   string `json:"action,omitempty"`
+	Resource string `json:"resource,omitempty"`
+	Input    string `json:"input,omitempty"`
+}
+
+// ResourceView is a serializable engine.Resource (a builtin's sub-resource).
+type ResourceView struct {
+	Kind   string            `json:"kind"`
+	Name   string            `json:"name"`
+	Status string            `json:"status"`
+	Info   map[string]string `json:"info,omitempty"`
+}
+
+// ActionView is a serializable engine.Action (a builtin data operation).
+type ActionView struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Kind        string `json:"kind"`
+	Destructive bool   `json:"destructive,omitempty"`
+	InputHint   string `json:"input_hint,omitempty"`
 }
 
 // InstanceView is a serializable snapshot of one backend's state.
@@ -51,6 +74,9 @@ type Response struct {
 	IdleTimeout time.Duration  `json:"idle_timeout,omitempty"` // reap window, for the countdown
 	Instances   []InstanceView `json:"instances,omitempty"`
 	Lines       []string       `json:"lines,omitempty"`
+	Resources   []ResourceView `json:"resources,omitempty"` // builtin sub-resources (resources op)
+	Actions     []ActionView   `json:"actions,omitempty"`   // available data actions (resources op)
+	Result      string         `json:"result,omitempty"`    // an admin action's result line (admin op)
 }
 
 // Handler implements the daemon-side operations.
@@ -64,6 +90,11 @@ type Handler interface {
 	KeepAwake(db string) error // toggle the idle-reaper exemption for db
 	Apply(ctx context.Context, db string) error
 	Destroy(ctx context.Context, db string) error
+	// Resources lists a builtin instance's sub-resources and the data actions it
+	// offers; empty (no error) when the engine has no admin capability.
+	Resources(ctx context.Context, db string) ([]ResourceView, []ActionView, error)
+	// Admin runs a data action on a resource, returning its result line.
+	Admin(ctx context.Context, db, action, resource, input string) (string, error)
 }
 
 // Server listens on a unix socket and dispatches requests to a Handler.
@@ -162,6 +193,23 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			resp.Error = err.Error()
 		} else {
 			resp.OK = true
+		}
+	case "resources":
+		res, acts, err := s.h.Resources(ctx, req.DB)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.OK = true
+			resp.Resources = res
+			resp.Actions = acts
+		}
+	case "admin":
+		out, err := s.h.Admin(ctx, req.DB, req.Action, req.Resource, req.Input)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.OK = true
+			resp.Result = out
 		}
 	default:
 		resp.Error = "unknown op: " + req.Op

@@ -262,3 +262,50 @@ func (h *handler) Logs(name string) ([]string, error) {
 	}
 	return p.Logs(), nil
 }
+
+// Resources lists a builtin instance's sub-resources (queues/buckets/topics) with
+// a live status line, plus the data actions its engine offers. Empty (no error)
+// when the engine has no admin capability; an error when it isn't running.
+func (h *handler) Resources(ctx context.Context, name string) ([]control.ResourceView, []control.ActionView, error) {
+	adm, inst, err := h.d.rt.AdminFor(name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if adm == nil {
+		return nil, nil, nil
+	}
+	if h.d.rt.Backend(name) == nil {
+		return nil, nil, fmt.Errorf("instance %q is not running — boot it first", name)
+	}
+	res, err := adm.Resources(ctx, inst, inst.Endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	rv := make([]control.ResourceView, 0, len(res))
+	for _, r := range res {
+		rv = append(rv, control.ResourceView{Kind: r.Kind, Name: r.Name, Status: r.Status, Info: r.Info})
+	}
+	acts := adm.Actions()
+	av := make([]control.ActionView, 0, len(acts))
+	for _, a := range acts {
+		av = append(av, control.ActionView{
+			ID: a.ID, Label: a.Label, Kind: a.Kind, Destructive: a.Destructive, InputHint: a.InputHint,
+		})
+	}
+	return rv, av, nil
+}
+
+// Admin runs a builtin data action (purge/empty/publish/…) on a named resource.
+func (h *handler) Admin(ctx context.Context, name, action, resource, input string) (string, error) {
+	adm, inst, err := h.d.rt.AdminFor(name)
+	if err != nil {
+		return "", err
+	}
+	if adm == nil {
+		return "", fmt.Errorf("instance %q (%s) has no data actions", name, inst.Type)
+	}
+	if h.d.rt.Backend(name) == nil {
+		return "", fmt.Errorf("instance %q is not running — boot it first", name)
+	}
+	return adm.Run(ctx, inst, inst.Endpoint, action, resource, input)
+}

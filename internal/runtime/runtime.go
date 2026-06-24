@@ -129,6 +129,22 @@ func (r *Runtime) Boot(ctx context.Context, name string) (engine.Endpoint, error
 	return res.(engine.Endpoint), nil
 }
 
+// AdminFor returns the builtin data-admin capability for an instance plus the
+// engine.Instance to operate on. The returned Admin is nil (with a nil error)
+// when the engine has no admin capability — callers treat that as "no actions".
+func (r *Runtime) AdminFor(name string) (engine.Admin, engine.Instance, error) {
+	decl := r.cfg.Lookup(name)
+	if decl == nil {
+		return nil, engine.Instance{}, fmt.Errorf("instance %q is not declared", name)
+	}
+	drv, ok := engine.Lookup(decl.Type)
+	if !ok {
+		return nil, engine.Instance{}, fmt.Errorf("no driver for engine %q", decl.Type)
+	}
+	adm, _ := drv.(engine.Admin) // nil when the engine has no admin capability
+	return adm, r.instanceFor(decl, drv), nil
+}
+
 func (r *Runtime) endpointFor(name string) (engine.Endpoint, error) {
 	decl := r.cfg.Lookup(name)
 	if decl == nil {
