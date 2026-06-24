@@ -1,6 +1,6 @@
 # Configuration reference
 
-doze reads HCL from `doze.hcl` (and any sibling `doze.d/*.hcl`, merged
+doze reads HCL from `doze.hcl` (and any sibling `*.doze.hcl`, merged
 automatically — see [splitting config](#splitting-config-across-files)). The file
 has a fixed **root** plus one **block per instance**, keyed by engine:
 
@@ -12,7 +12,7 @@ valkey   "cache" { version = 9 }
 ```
 
 Jump to an engine: [postgres](#postgres) · [valkey](#valkey) ·
-[kvrocks](#kvrocks) · [ferretdb](#ferretdb) · [s3](#s3) · [sqs](#sqs) ·
+[kvrocks](#kvrocks) · [documentdb](#documentdb) · [s3](#s3) · [sqs](#sqs) ·
 [sns](#sns).
 
 This is the field-by-field reference. For what each engine *is* and when to use
@@ -312,16 +312,15 @@ kvrocks "store" {
 
 ---
 
-## ferretdb
+## documentdb
 
-MongoDB-wire front end backed by a Postgres instance (with the `documentdb`
-extension). See the [FerretDB recipe](../recipes/ferretdb.md).
+A self-contained, MongoDB-compatible engine: doze runs a private PostgreSQL with
+Microsoft's DocumentDB extension behind a FerretDB gateway, exposing only the
+Mongo wire (`MONGODB_URI`). Versionless — no `version`, no backend to wire up. See
+the [DocumentDB recipe](../recipes/documentdb.md).
 
 ```hcl
-ferretdb "docs" {
-  version = 2
-  backend = "docs_pg"
-}
+documentdb "docs" {}
 ```
 
 | Field | Type | Default | Description |
@@ -424,8 +423,8 @@ sns "events" {
 
 ## Splitting config across files
 
-Root settings live in `doze.hcl`; instance blocks may be split into a sibling
-`doze.d/*.hcl` directory (merged automatically), or pass `--config <dir>` to merge
+Root settings live in `doze.hcl`; instance blocks may be split across sibling
+`*.doze.hcl` files (merged automatically), or pass `--config <dir>` to merge
 every `*.hcl` in a directory. See [Files & storage](../guide/files-and-storage.md#breaking-config-into-files).
 
 ## Versions & the lockfile
@@ -444,5 +443,5 @@ A bare major (`version = 16`) resolves to the newest minor and is pinned in
 | `DOZE_<NAME>_URL` | every instance, always |
 | `DATABASE_URL` | the single postgres instance (if unambiguous) |
 | `REDIS_URL` | the single valkey/kvrocks instance |
-| `MONGODB_URI` | the single ferretdb instance |
+| `MONGODB_URI` | the single documentdb instance |
 | `AWS_ENDPOINT_URL_S3` / `_SQS` / `_SNS` | the AWS services, plus `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` (dummy values) |

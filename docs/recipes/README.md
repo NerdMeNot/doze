@@ -12,7 +12,7 @@ engines](../guide/engines.md)**.
 
 ## How every recipe works
 
-1. **Declare** instances in `doze.hcl` (or split across `doze.d/*.hcl`).
+1. **Declare** instances in `doze.hcl` (or split across sibling `*.doze.hcl`).
 2. **Use** them — either let doze inject connection strings:
    ```sh
    doze run -- <your command>     # ensures up, injects env, runs the command
@@ -28,7 +28,7 @@ for its engine when exactly one instance claims it:
 |---|---|
 | postgres | `DATABASE_URL` |
 | valkey / kvrocks | `REDIS_URL` |
-| ferretdb | `MONGODB_URI` |
+| documentdb | `MONGODB_URI` |
 | s3 / sqs / sns | `AWS_ENDPOINT_URL_S3` / `_SQS` / `_SNS` (+ dummy `AWS_*` creds) |
 
 doze converges **structure** (databases, roles, schemas, grants, extensions,
@@ -38,12 +38,12 @@ buckets, queues, topics) — never data. Your app/migrations own the data.
 
 - [PostgreSQL](postgres.md) — roles, schemas, grants, extensions, multiple DBs, tuning, versions
 - [Valkey & Kvrocks](valkey-kvrocks.md) — Redis-protocol cache and durable KV
-- [FerretDB](ferretdb.md) — MongoDB wire on a Postgres backend
+- [DocumentDB](documentdb.md) — MongoDB wire, self-contained (Postgres + gateway)
 - [S3](s3.md) — local object storage (buckets, multipart, presigned URLs)
 - [SQS](sqs.md) — queues, FIFO, DLQ + redrive
 - [SNS](sns.md) — topics, SNS→SQS fanout, filter policies, webhooks
 - [Workflows](workflows.md) — `run`/`env`, ephemeral test DBs, status/dash/logs, CI
-- [Config layout](config-layout.md) — splitting config across `doze.d` files + per-dev overrides
+- [Config layout](config-layout.md) — splitting config across `*.doze.hcl` files + per-dev overrides
 - [Full stacks](stacks.md) — polyglot apps end to end + framework wiring
 
 For where doze stores engines, data, sockets, and logs — and what to commit vs

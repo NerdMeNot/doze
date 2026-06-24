@@ -14,7 +14,7 @@ and reaps when idle.
 ### Added
 
 - **Database engines**: PostgreSQL, Valkey, Kvrocks (Redis protocol), and
-  FerretDB (MongoDB wire), each a declarative config block (`postgres "n" {}`,
+  DocumentDB (MongoDB wire), each a declarative config block (`postgres "n" {}`,
   `valkey "n" {}`, …).
 - **Built-in AWS services**: local **S3, SQS, and SNS** implemented in pure Go
   and shipped inside the binary — no Docker, no JVM, no LocalStack. SQS speaks
@@ -32,11 +32,11 @@ and reaps when idle.
 - **`doze run` / `doze env`**: ensure instances up and inject connection strings
   (`DATABASE_URL`, `REDIS_URL`, `MONGODB_URI`, `AWS_ENDPOINT_URL_*` + dummy
   creds, plus `DOZE_<NAME>_URL`); `.doze/endpoints.yaml` manifest.
-- **Instance dependencies**: a dependent boots and holds its dependencies
-  (FerretDB → Postgres backend, SNS → SQS instance), releasing them on stop.
+- **Instance dependencies**: derived from the config reference graph, a dependent
+  boots and holds its dependencies (e.g. SNS → SQS instance), releasing them on stop.
 - **Copy-on-write templates & `doze ephemeral`**: `initdb` once per version,
   clone per instance (CoW); throwaway, isolated databases per test run.
-- **Multi-file config**: `doze.hcl` + a merged `doze.d/*.hcl` overlay (or
+- **Multi-file config**: `doze.hcl` + merged sibling `*.doze.hcl` files (or
   `--config <dir>`), with positioned, file/line config diagnostics and
   "did you mean?" hints.
 - **Interactive TUI** (`doze dash`): select an instance and boot/reap/restart it

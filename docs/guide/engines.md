@@ -16,7 +16,7 @@ reach for it.
 | **PostgreSQL** | the Postgres wire protocol | your primary SQL database | the real, unmodified upstream |
 | **Valkey** | the Redis (RESP) protocol | an in-memory cache | the open-source Redis after the 2024 relicense |
 | **Kvrocks** | the Redis (RESP) protocol | a durable, disk-backed KV store | Redis API without keeping everything in RAM |
-| **FerretDB** | the MongoDB wire protocol | a document store | "Mongo" without MongoDB's license, on Postgres |
+| **DocumentDB** | the MongoDB wire protocol | a document store | "Mongo" without MongoDB's license, on Postgres |
 | **S3 / SQS / SNS** | the AWS APIs | object storage, queues, pub/sub | local AWS with no LocalStack, Docker, or JVM |
 
 ## PostgreSQL — the real database
@@ -72,32 +72,25 @@ living in RAM → Kvrocks. Both talk Redis, so you can switch by changing one bl
 
 → [Valkey & Kvrocks recipes](../recipes/valkey-kvrocks.md)
 
-## FerretDB — MongoDB-compatible, on Postgres
+## DocumentDB — MongoDB-compatible, on Postgres
 
 MongoDB moved its server to the SSPL in 2018, a license the OSI never
-approved.[^mongo] **FerretDB** is an Apache-2.0 database that speaks the MongoDB
-wire protocol and stores its data in **PostgreSQL** (via the DocumentDB
-extension).[^ferret] Your MongoDB drivers and `MONGODB_URI` connect to it
-unchanged.
+approved.[^mongo] doze's **DocumentDB** engine speaks the MongoDB wire protocol,
+so your MongoDB drivers and `MONGODB_URI` connect unchanged — backed by
+**PostgreSQL** with Microsoft's DocumentDB extension, behind a FerretDB
+gateway.[^ferret]
 
-So doze gives you a document store with the Mongo API, locally, without running
-MongoDB itself or accepting its license — and because it's backed by Postgres,
-doze manages that backend for you automatically (booting and holding it while
-FerretDB runs). It's a faithful local stand-in for development, not a
-reimplementation of every MongoDB feature.
+So you get a document store with the Mongo API, locally, without running MongoDB
+itself or accepting its license. It's a single, **self-contained** engine: you
+declare one block, and doze runs the private Postgres and the gateway for you,
+exposing only Mongo — no version to pick, no backend to wire up. A faithful local
+stand-in for development, not a reimplementation of every MongoDB feature.
 
 ```hcl
-postgres "docs_pg" {
-  version    = 16
-  extensions = ["documentdb"]
-}
-ferretdb "docs" {
-  version = 2
-  backend = "docs_pg"
-}
+documentdb "docs" {}
 ```
 
-→ [FerretDB recipes](../recipes/ferretdb.md)
+→ [DocumentDB recipes](../recipes/documentdb.md)
 
 ## S3, SQS, SNS — local AWS, no LocalStack
 
@@ -142,6 +135,7 @@ field in the **[Configuration reference](../reference/configuration.md)**.
     the SSPL is not OSI-approved. See
     [MongoDB's announcement](https://www.mongodb.com/company/newsroom/press-releases/mongodb-issues-new-server-side-public-license-for-mongodb-community-server).
 
-[^ferret]: FerretDB is an Apache-2.0, MongoDB-compatible database that speaks the
-    MongoDB wire protocol and stores data in PostgreSQL (FerretDB 2.x uses the
-    DocumentDB extension). See [FerretDB](https://github.com/FerretDB/FerretDB).
+[^ferret]: doze's DocumentDB engine pairs Microsoft's [DocumentDB
+    extension](https://github.com/microsoft/documentdb) for PostgreSQL with a
+    [FerretDB](https://github.com/FerretDB/FerretDB) gateway (Apache-2.0) that
+    speaks the MongoDB wire protocol — all run privately and exposed as one engine.

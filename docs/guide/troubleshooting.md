@@ -51,8 +51,9 @@ Common causes:
 - **Postgres extension not found** — a name in `extensions` (or an `extension`
   block) that the binary doesn't ship. Remove it or provide a `source` bundle
   ([Extensions](../EXTENSIONS.md)).
-- **FerretDB backend missing `documentdb`** — the `backend` Postgres must be built
-  with the `documentdb` extension.
+- **DocumentDB first boot is slow / times out** — its first boot builds a private
+  Postgres cluster and runs `CREATE EXTENSION` (a few minutes). Warm it ahead of
+  time with `doze start docs`; later boots are sub-second.
 - **Bad config value** — re-run `doze doctor`; config errors point at the file and
   line.
 

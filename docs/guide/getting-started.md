@@ -195,7 +195,7 @@ idle**. From here:
 
 - **[Why doze](why-doze.md)** — the case against docker-compose / native installs,
   and **[the footprint numbers](resource-footprint.md)** behind "quiet laptop."
-- **[The engines](engines.md)** — what Valkey, Kvrocks, and FerretDB actually are.
+- **[The engines](engines.md)** — what Valkey, Kvrocks, and DocumentDB actually are.
 - **[Core concepts](concepts.md)** — how lazy boot, reaping, convergence, and the
   proxy actually work.
 - **[Files & storage](files-and-storage.md)** — where doze keeps everything, what

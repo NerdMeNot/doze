@@ -73,22 +73,15 @@ only the filtered subset.
 ## Mongo-style service
 
 ```hcl
-postgres "docs_pg" {
-  version    = 16
-  extensions = ["documentdb"]
-}
-ferretdb "docs" {
-  version = 2
-  backend = "docs_pg"
-}
+documentdb "docs" {}
 ```
 
-`doze run -- ./svc` injects `MONGODB_URI`; the Postgres backend boots and is held
-automatically.
+`doze run -- ./svc` injects `MONGODB_URI`; doze runs the private Postgres + Mongo
+gateway for you — one self-contained engine, nothing to wire up.
 
 ## The kitchen sink (everything at once)
 
-Split across `doze.d/` for readability — see [config layout](config-layout.md).
+Split across `*.doze.hcl` for readability — see [config layout](config-layout.md).
 
 ```hcl
 # doze.hcl
@@ -101,18 +94,11 @@ valkey  "cache" { version = 9 }
 kvrocks "kv"    { version = 2 }
 ```
 ```hcl
-# doze.d/mongo.hcl
-postgres "mongo_pg" {
-  version    = 16
-  extensions = ["documentdb"]
-}
-ferretdb "mongo" {
-  version = 2
-  backend = "mongo_pg"
-}
+# mongo.doze.hcl
+documentdb "mongo" {}
 ```
 ```hcl
-# doze.d/aws.hcl
+# aws.doze.hcl
 s3 "blob" {
   bucket "data" {}
 }

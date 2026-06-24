@@ -37,7 +37,7 @@ internal/
 engine/
   postgres/          first driver: cluster, converge, extensions, proxyfilter, template
   valkey/ kvrocks/   Redis-protocol drivers (required methods only)
-  ferretdb/          MongoDB-wire driver; depends on a Postgres backend
+  documentdb/        MongoDB-wire driver: private Postgres + extension + FerretDB gateway
 docs/                design docs (architecture, binaries, extensions)
 ```
 

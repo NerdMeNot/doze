@@ -55,7 +55,7 @@ ceremony — whether you're using it this second or not.
 doze keeps the good part of every option and drops the tax.
 
 > **Real engines that sleep.** doze runs the *actual* PostgreSQL, Valkey,
-> Kvrocks, and FerretDB binaries — plus pure-Go S3, SQS, and SNS — but only while
+> Kvrocks, and DocumentDB binaries — plus pure-Go S3, SQS, and SNS — but only while
 > a client is connected. Declare what you need in one file; doze fetches pinned
 > binaries, boots each engine on first connect, splices your connection straight
 > through, and returns the RAM the moment you walk away.
@@ -97,7 +97,7 @@ stand-ins** for software that's otherwise heavy or encumbered:
 - **Kvrocks** speaks the same Redis protocol but stores data on disk via RocksDB,
   so it's a low-RAM stand-in when you have more keys than you want resident in
   memory.
-- **FerretDB** gives you a MongoDB-compatible document store on top of Postgres —
+- **DocumentDB** gives you a MongoDB-compatible document store on top of Postgres —
   "Mongo" locally without MongoDB's restrictive license.
 
 The full story, with the licensing and cost details, is in **[The

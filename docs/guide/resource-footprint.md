@@ -108,7 +108,7 @@ holds.
 ---
 
 **Next:** **[The engines](engines.md)** — why doze runs Valkey, Kvrocks, and
-FerretDB — or **[Why doze](why-doze.md)** for the full case.
+DocumentDB — or **[Why doze](why-doze.md)** for the full case.
 
 [^docker]: Docker Desktop allocates 50% of host memory to its Linux VM by
     default, and that VM runs even with no containers (the "Resource Saver"

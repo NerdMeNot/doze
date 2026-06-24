@@ -3,7 +3,7 @@
 doze is a single Go binary that is both a CLI and a long-running daemon. The
 daemon is a thin proxy in front of many real backing-service instances — one per
 declared block — that it boots on demand and reaps when idle. Most are unmodified
-database binaries (Postgres, Valkey, Kvrocks, FerretDB); the local **AWS
+database binaries (Postgres, Valkey, Kvrocks, DocumentDB); the local **AWS
 services (S3, SQS, SNS)** are built into the doze binary and run as self-exec'd
 child processes behind the same proxy.
 
@@ -44,10 +44,12 @@ type Driver interface {
 
 // Optional, discovered by type assertion:
 type Converger       interface { Converge(...) error }            // roles/db/schema/grants (Postgres)
+type Inventory       interface { Objects(inst) []Object }         // tracked structure (plan/apply/destroy)
+type Pruner          interface { Prune(...) error }               // drop removed objects (apply/destroy)
+type Attributer      interface { Attributes(inst, ep) map[...] }  // attrs exposed for config references
 type ProxyFilter     interface { Preamble(...); Handshake(...) }  // startup/TLS/cancel (Postgres)
 type Templater       interface { EnsureTemplate(...); CloneTemplate(...) } // CoW (Postgres)
-type Dependent       interface { DependsOn(inst) []string }       // FerretDB → Postgres; SNS → SQS
-type BackendProvider interface { BackendURL(inst) string }        // Postgres as a backend
+type BackendProvider interface { BackendURL(inst) string }        // serve as another instance's backend
 type ConfigDecoder   interface { DecodeConfig(body, ctx, baseDir) (EngineConfig, error) }
 type ErrorWriter     interface { WriteError(w, code, message) }   // protocol-clean errors
 type EnvProvider     interface { Env(inst, ep) map[string]string } // extra env (AWS creds/region)
@@ -96,7 +98,7 @@ to the SNS worker for fanout.
 | `internal/proxy` | One listener per instance, byte splice, the cancel registry, and optional `ProxyFilter` dispatch. |
 | `internal/supervisor` | Generic process lifecycle: spawn, clean stop (SIGINT→SIGQUIT→SIGKILL), parent-death cleanup. Implements `engine.Process`. |
 | `internal/binaries` | The multi-engine mirror manifest, content-addressed cache, and the `doze.lock` lockfile. |
-| `internal/config` | HCL → an engine-agnostic root plus per-engine block dispatch to each driver's `ConfigDecoder`. Merges `doze.hcl` + `doze.d/*.hcl` (or a `--config` directory); reports validation errors with file/line/snippet and "did you mean" hints. |
+| `internal/config` | HCL → an engine-agnostic root plus per-engine block dispatch to each driver's `ConfigDecoder`. Two-phase evaluator: variables/locals/outputs, functions, `for_each`/`count`, and typed cross-instance references that build the dependency graph. Merges `doze.hcl` + sibling `*.doze.hcl` (or a `--config` directory); reports validation errors with file/line/snippet and "did you mean" hints. |
 | `internal/endpoints` | Per-instance client addresses, connection strings, and `.doze/endpoints.yaml`. |
 | `internal/ui` | Shared, color-gated CLI/TUI vocabulary: palette, state coloring, ANSI-aware table, cross-platform RAM, uptime. Plain when piped or `NO_COLOR`. |
 | `internal/control` | Newline-delimited JSON admin IPC over a unix socket. |
@@ -104,8 +106,8 @@ to the SNS worker for fanout.
 | `internal/tui` | Charm Bubble Tea dashboard. |
 | `engine/postgres` | The Postgres driver: cluster (`initdb`/conf/hba), convergence, extensions, the startup/TLS/cancel `ProxyFilter`, CoW `Templater`, `BackendProvider`. |
 | `engine/valkey`, `engine/kvrocks` | Redis-protocol drivers (required methods only). |
-| `engine/ferretdb` | MongoDB-wire driver; `Dependent` on a Postgres backend. |
-| `engine/s3`, `engine/sqs`, `engine/sns` | Local-AWS drivers: `ConfigDecoder` + `Converger` over `awslocal.BaseDriver` (self-exec). `sns` is `Dependent` on its `sqs` instance. |
+| `engine/documentdb` | MongoDB-wire driver: a private Postgres + DocumentDB extension behind a FerretDB gateway, run as one self-contained composite engine. |
+| `engine/s3`, `engine/sqs`, `engine/sns` | Local-AWS drivers: `ConfigDecoder` + `Converger`/`Inventory`/`Pruner` over `awslocal.BaseDriver` (self-exec). `sns` depends on its `sqs` instance via a config reference. |
 | `internal/awslocal` | The self-exec harness: `BaseDriver`, the unix-socket serve loop + health endpoint + service-factory registry (`doze __serve`), and shared AWS identity/ARN helpers. |
 | `internal/s3srv` | S3 server: gofakes3 over a bbolt store. |
 | `internal/sqssrv` | Ground-up SQS server: both wire protocols, bbolt store, visibility/long-poll/FIFO/DLQ, notifier-based receive. |
@@ -121,8 +123,9 @@ to the SNS worker for fanout.
   needs no protocol parsing; protocol awareness is a per-engine opt-in.
 - **Reap on connection count, never on query inactivity.** Connection pools hold
   idle connections open and must not be severed.
-- **Instance dependencies are first-class.** A dependent boots and holds its
-  dependencies (e.g. FerretDB → Postgres, SNS → SQS), releasing them on stop.
+- **Instance dependencies are first-class.** Derived from the config reference
+  graph, a dependent boots and holds its dependencies (e.g. SNS → SQS), releasing
+  them on stop.
 - **Built-in services, no new runtime.** S3/SQS/SNS ship inside the binary and
   self-exec as `doze __serve` children, so "local AWS" needs no Docker, no JVM,
   and no LocalStack — and reuses the same boot/splice/reap path as everything else.

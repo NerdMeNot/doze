@@ -66,7 +66,7 @@ teammate and your CI download **byte-identical** binaries. See
 Commit `doze.hcl` and `doze.lock`. A teammate clones the repo and runs
 `doze run -- …` (or `doze apply`) — they get the same engines, versions, databases,
 roles, buckets, and queues, with no manual setup. Personal tweaks go in a
-gitignored `doze.d/local.hcl` (see
+gitignored `local.doze.hcl` (see
 [Files & storage](files-and-storage.md#per-developer-overrides)).
 
 - **docker-compose** runs a heavyweight, always-on stack in Docker. doze runs

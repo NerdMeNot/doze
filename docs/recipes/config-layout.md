@@ -4,18 +4,16 @@ Quick patterns for organizing config across files. For the full picture — wher
 doze stores everything, what to commit vs ignore, and resetting state — see the
 **[Files & storage guide](../guide/files-and-storage.md)**.
 
-## Split config with `doze.d`
+## Split config across `*.doze.hcl` files
 
-Root settings live in `doze.hcl`; instance blocks can be split into a sibling
-`doze.d/*.hcl` directory, merged automatically (sorted, deterministic).
+`doze.hcl` is the anchor (it holds root settings); every sibling **`*.doze.hcl`**
+file beside it is merged automatically, sorted and deterministic. Split by concern:
 
 ```
 my-app/
-  doze.hcl            # root settings (listen/defaults/tls) + core instances
-  doze.d/
-    databases.hcl     # extra postgres instances
-    cache.hcl         # valkey / kvrocks
-    aws.hcl           # s3 / sqs / sns
+  doze.hcl              # root settings (listen/defaults/tls) + variables/outputs
+  databases.doze.hcl    # postgres / valkey / kvrocks
+  aws.doze.hcl          # s3 / sqs / sns
 ```
 
 ```hcl
@@ -29,7 +27,7 @@ postgres "app" {
 ```
 
 ```hcl
-# doze.d/aws.hcl
+# aws.doze.hcl
 s3 "media" {
   bucket "uploads" {}
 }
@@ -39,13 +37,14 @@ sqs "jobs" {
 ```
 
 ```sh
-doze status     # shows app (doze.hcl) + media, jobs (doze.d/)
+doze status     # shows app (doze.hcl) + media, jobs (aws.doze.hcl)
 doze doctor     # validates the merged whole
 ```
 
 Instance names must be unique across all files; root settings (`listen`,
-`defaults`, `tls`, …) belong only in `doze.hcl`. Errors are reported with the
-file, line, and a snippet.
+`defaults`, `tls`, …) belong only in `doze.hcl`. A plain `*.hcl` sibling is **not**
+merged — only `*.doze.hcl` — so unrelated HCL files in the folder are left alone.
+Errors are reported with the file, line, and a snippet.
 
 Or merge every `*.hcl` in a directory:
 
@@ -55,11 +54,11 @@ doze --config ./config status
 
 ## Per-developer overrides
 
-Shared instances stay committed in `doze.hcl`; each developer adds personal ones
-in a **gitignored** `doze.d/local.hcl`:
+Shared instances stay committed in `doze.hcl` (and friends); each developer adds
+personal ones in a **gitignored** `local.doze.hcl`:
 
 ```hcl
-# doze.d/local.hcl  (gitignored)
+# local.doze.hcl  (gitignored — yours alone)
 postgres "scratch" {
   version = 17
   role "me" { password = "me" }
@@ -69,8 +68,12 @@ postgres "scratch" {
 ```gitignore
 # .gitignore
 .doze/
-doze.d/local.hcl
+local.doze.hcl
 ```
+
+For tweaking *values* (not adding instances), a gitignored `*.auto.doze.vars` file
+overrides [variables](../reference/configuration.md#variables-locals--outputs)
+without touching the config.
 
 ## Versions & TLS
 

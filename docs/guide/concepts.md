@@ -106,7 +106,7 @@ address and connection string and inject them:
 - a unique `DOZE_<NAME>_URL` for every instance, plus
 - the conventional variable for its engine when exactly one instance claims it:
   `DATABASE_URL` (postgres), `REDIS_URL` (valkey/kvrocks), `MONGODB_URI`
-  (ferretdb), `AWS_ENDPOINT_URL_S3`/`_SQS`/`_SNS` plus dummy `AWS_*` credentials.
+  (documentdb), `AWS_ENDPOINT_URL_S3`/`_SQS`/`_SNS` plus dummy `AWS_*` credentials.
 
 The current set is also written to `.doze/endpoints.yaml` for other tooling to
 read.
@@ -135,24 +135,27 @@ can run Postgres 14 and 17 side by side without a second thought.
 
 ## Instance dependencies
 
-Some engines need another to function. **FerretDB** stores its data in a Postgres
-backend; **SNS** fans out to an SQS instance. You express this with one field, and
-doze handles the lifecycle:
+Some instances need another to function — **SNS** fans out to an **SQS** queue.
+You express it with a typed reference, and doze derives the dependency and handles
+the lifecycle:
 
 ```hcl
-postgres "docs_pg" {
-  version    = 16
-  extensions = ["documentdb"]
+sqs "jobs" {
+  queue "emails" {}
 }
-ferretdb "docs" {
-  version = 2
-  backend = "docs_pg"
+sns "events" {
+  sqs = sqs.jobs.name        # reference → events depends on jobs
+  topic "signups" {}
 }
 ```
 
-Booting `docs` boots `docs_pg` first, injects its connection info, and **holds it
-running** for as long as `docs` runs (so the reaper won't take the backend out
-from under it). Stopping `docs` releases it.
+Booting `events` boots `jobs` first, injects its connection info, and **holds it
+running** for as long as `events` runs (so the reaper won't take the backend out
+from under it). Stopping `events` releases it. The ordering falls out of the
+reference — there's nothing extra to declare.
+
+(DocumentDB *looks* like it needs a Postgres backend, but it's self-contained:
+doze runs that Postgres privately and exposes only the Mongo wire.)
 
 ## Local AWS, built in
 
@@ -182,7 +185,7 @@ plus per-project state.
 
 ```
 ~/.doze/
-  postgres/  valkey/  kvrocks/  ferretdb/        # shared engine toolchains (cached once)
+  postgres/  valkey/  kvrocks/  documentdb/      # shared engine toolchains (cached once)
   postgres/_templates/16.14.0/                   # copy-on-write boot template
   projects/myapp-1a2b3c4d/                       # this project's data dirs, sockets, logs
 ```

@@ -4,7 +4,7 @@
 
 ### Real databases on your laptop — asleep until you need them.
 
-doze runs **Postgres, Valkey, Kvrocks, FerretDB**, and local **S3, SQS, and SNS**
+doze runs **Postgres, Valkey, Kvrocks, DocumentDB**, and local **S3, SQS, and SNS**
 as real services — no Docker, no JVM, no always-on stack. Declare what your app
 needs in one file; doze fetches the real engines, boots each the moment something
 connects, and puts it back to sleep when you walk away. At rest, your whole
@@ -104,7 +104,7 @@ the API your code already speaks, without the heavy or encumbered originals.
 | **PostgreSQL** | your primary database — roles, schemas, extensions | the real, unmodified upstream (14–17) |
 | **Valkey** | a Redis-compatible in-memory cache | the open-source Redis after the 2024 relicense |
 | **Kvrocks** | Redis-compatible, RocksDB-backed durable KV | Redis API without keeping it all in RAM |
-| **FerretDB** | a MongoDB-wire document store | "Mongo" on Postgres, without MongoDB's license |
+| **DocumentDB** | a MongoDB-wire document store | "Mongo" on Postgres, without MongoDB's license |
 | **S3 / SQS / SNS** | object storage, queues, pub/sub | local AWS with no LocalStack, Docker, or JVM |
 
 Mix as many as you want in one file. → **[The engines](docs/guide/engines.md)** ·

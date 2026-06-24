@@ -12,7 +12,7 @@ reset or clean things up.
 my-app/
   doze.hcl            # you write this  — your declared instances        (commit)
   doze.lock           # doze writes this — resolved versions + checksums  (commit)
-  doze.d/             # optional         — extra config, split by topic   (commit)
+  *.doze.hcl          # optional         — extra config, split by topic   (commit)
   .doze/              # doze writes this — runtime manifest               (gitignore)
 ```
 
@@ -26,8 +26,8 @@ tiny.
 Your declared instances and root settings. The one file you really author. See the
 [configuration reference](../reference/configuration.md).
 
-### `doze.d/*.hcl` (optional)
-You can split instances into a sibling `doze.d/` directory — doze merges them
+### `*.doze.hcl` (optional)
+You can split instances across sibling `*.doze.hcl` files — doze merges them
 automatically. See [breaking config into files](#breaking-config-into-files).
 
 ### `doze.lock` — commit it
@@ -49,7 +49,7 @@ laid out like [moonrepo's proto](https://moonrepo.dev/proto):
   postgres/                                  # engine toolchains, downloaded once…
     16.14.0-aarch64-apple-darwin/bin         #   …and shared by every project
     _templates/16.14.0/                      # copy-on-write boot template (initdb once)
-  valkey/  kvrocks/  ferretdb/               # same idea per engine
+  valkey/  kvrocks/  documentdb/             # same idea per engine
   cache/                                     # transient downloads
   tls/                                       # auto-generated self-signed cert (shared)
   projects/                                  # per-project state (see below)
@@ -111,8 +111,8 @@ data_dir = "./.doze-state"   # keep THIS project's data inside the repo instead
 |---|---|---|
 | `doze.hcl` | ✅ | your declared environment |
 | `doze.lock` | ✅ | byte-identical binaries for the whole team |
-| `doze.d/*.hcl` | ✅ | shared split config |
-| `doze.d/local.hcl` | ❌ | per-developer overrides (see below) |
+| `*.doze.hcl` | ✅ | shared split config |
+| `local.doze.hcl` | ❌ | per-developer overrides (see below) |
 | `.doze/` | ❌ | regenerated runtime manifest |
 | `data_dir` if inside the repo | ❌ | actual database data |
 
@@ -120,23 +120,23 @@ A typical `.gitignore`:
 
 ```gitignore
 .doze/
-doze.d/local.hcl
+local.doze.hcl
 .doze-state/        # only if you set data_dir to an in-repo path
 ```
 
 ## Breaking config into files
 
-For anything past a couple of instances, split `doze.hcl` into a `doze.d/`
-directory. doze loads `doze.hcl` first (it holds the root settings), then merges
-every `doze.d/*.hcl` in sorted order — it's all one config.
+For anything past a couple of instances, split `doze.hcl` into sibling
+`*.doze.hcl` files. doze loads `doze.hcl` first (it holds the root settings), then
+merges every `*.doze.hcl` beside it in sorted order — it's all one config. (A plain
+`*.hcl` sibling is left alone; only the `*.doze.hcl` suffix is auto-merged.)
 
 ```
 my-app/
-  doze.hcl            # root settings (listen/defaults/tls) + core instances
-  doze.d/
-    databases.hcl     # postgres instances
-    cache.hcl         # valkey / kvrocks
-    aws.hcl           # s3 / sqs / sns
+  doze.hcl              # root settings (listen/defaults/tls) + core instances
+  databases.doze.hcl    # postgres instances
+  cache.doze.hcl        # valkey / kvrocks
+  aws.doze.hcl          # s3 / sqs / sns
 ```
 
 ```hcl
@@ -150,7 +150,7 @@ postgres "app" {
 ```
 
 ```hcl
-# doze.d/aws.hcl  — just more instances
+# aws.doze.hcl  — just more instances
 s3 "media" {
   bucket "uploads" {}
 }
@@ -160,7 +160,7 @@ sqs "jobs" {
 ```
 
 ```sh
-doze status     # shows app (from doze.hcl) and media + jobs (from doze.d/)
+doze status     # shows app (from doze.hcl) and media + jobs (from aws.doze.hcl)
 doze doctor     # validates the merged whole
 ```
 
@@ -181,10 +181,10 @@ doze doctor     # validates the merged whole
 ### Per-developer overrides
 
 Keep shared instances committed in `doze.hcl`, and let each developer add personal
-ones in a **gitignored** `doze.d/local.hcl`:
+ones in a **gitignored** `local.doze.hcl`:
 
 ```hcl
-# doze.d/local.hcl  (gitignored — yours alone)
+# local.doze.hcl  (gitignored — yours alone)
 postgres "scratch" {
   version = 17
   role "me" { password = "me" }
