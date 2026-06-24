@@ -571,3 +571,24 @@ fake "b" {
 		t.Errorf("expected invalid-condition error, got %v", err)
 	}
 }
+
+func TestSiblingDozeHCLFilesAreMerged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "doze.hcl", `
+defaults { idle_timeout = "1m" }
+fake "anchor" { version = 1 }
+`)
+	writeFile(t, dir, "extra.doze.hcl", `fake "sibling" { version = 1 }`)
+	writeFile(t, dir, "ignored.hcl", `fake "nope" { version = 1 }`) // not *.doze.hcl
+
+	cfg, err := Load(dir + "/doze.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Lookup("anchor") == nil || cfg.Lookup("sibling") == nil {
+		t.Errorf("anchor + sibling should both be loaded: %d instances", len(cfg.Instances))
+	}
+	if cfg.Lookup("nope") != nil {
+		t.Error("a plain *.hcl sibling must NOT be auto-merged (only *.doze.hcl)")
+	}
+}

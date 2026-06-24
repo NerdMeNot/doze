@@ -120,10 +120,10 @@ type hclDefaults struct {
 func Load(path string) (*Config, error) { return LoadWithVars(path, nil) }
 
 // LoadWithVars reads and validates the doze configuration at path. path may be a
-// single file (e.g. doze.hcl) — in which case a sibling doze.d/*.hcl directory is
-// merged in if present — or a directory, in which case all of its *.hcl files are
-// merged. cliVars are --var overrides (highest precedence). Variable values also
-// come from DOZE_VAR_<name> env vars and sibling *.auto.doze.vars files.
+// single file (e.g. doze.hcl) — in which case every sibling *.doze.hcl is merged
+// in — or a directory, in which case all of its *.hcl files are merged. cliVars
+// are --var overrides (highest precedence). Variable values also come from
+// DOZE_VAR_<name> env vars and sibling *.auto.doze.vars files.
 func LoadWithVars(path string, cliVars map[string]string) (*Config, error) {
 	files, primary, err := gatherConfigFiles(path)
 	if err != nil {
@@ -163,7 +163,7 @@ func configDirOf(path string) string {
 
 // gatherConfigFiles resolves the ordered set of HCL files to merge, and the
 // "primary" path used for diagnostics and the project slug. doze.hcl is always
-// first so its root settings are authoritative; doze.d/*.hcl are appended sorted.
+// first so its root settings are authoritative; sibling *.doze.hcl are appended sorted.
 func gatherConfigFiles(path string) (files []string, primary string, err error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -177,18 +177,18 @@ func gatherConfigFiles(path string) (files []string, primary string, err error) 
 		}
 		return matches, path, nil
 	}
+	// The anchor file is authoritative for root settings; every sibling
+	// *.doze.hcl is auto-merged (sorted), so config can be split by concern
+	// (databases.doze.hcl, aws.doze.hcl, …) without an includes directive.
 	files = []string{path}
-	if dDir := filepath.Join(filepath.Dir(path), "doze.d"); dirExists(dDir) {
-		extra, _ := filepath.Glob(filepath.Join(dDir, "*.hcl"))
-		sort.Strings(extra)
-		files = append(files, extra...)
+	extra, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "*.doze.hcl"))
+	sort.Strings(extra)
+	for _, f := range extra {
+		if f != path { // the anchor may itself be a *.doze.hcl; don't double-load it
+			files = append(files, f)
+		}
 	}
 	return files, path, nil
-}
-
-func dirExists(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }
 
 // Parse validates HCL source bytes. filename is used only for diagnostics.

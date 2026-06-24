@@ -17,14 +17,14 @@ func write(t *testing.T, path, body string) {
 	}
 }
 
-func TestLoadMergesDozeD(t *testing.T) {
+func TestLoadMergesSiblingDozeHCL(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "doze.hcl")
 	write(t, main, `
 defaults { idle_timeout = "1m" }
 fake "a" { version = "1" }
 `)
-	write(t, filepath.Join(dir, "doze.d", "extra.hcl"), `
+	write(t, filepath.Join(dir, "extra.doze.hcl"), `
 fake "b" { version = "1" }
 `)
 
@@ -33,10 +33,10 @@ fake "b" { version = "1" }
 		t.Fatalf("Load: %v", err)
 	}
 	if cfg.Lookup("a") == nil || cfg.Lookup("b") == nil {
-		t.Fatalf("expected instances a (main) and b (doze.d), got %d", len(cfg.Instances))
+		t.Fatalf("expected instances a (anchor) and b (sibling), got %d", len(cfg.Instances))
 	}
 	if cfg.Defaults.IdleTimeout.String() != "1m0s" {
-		t.Fatalf("root settings from main not applied: %v", cfg.Defaults.IdleTimeout)
+		t.Fatalf("root settings from anchor not applied: %v", cfg.Defaults.IdleTimeout)
 	}
 }
 
@@ -58,7 +58,7 @@ func TestDuplicateAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "doze.hcl")
 	write(t, main, `fake "dup" { version = "1" }`)
-	write(t, filepath.Join(dir, "doze.d", "x.hcl"), `fake "dup" { version = "1" }`)
+	write(t, filepath.Join(dir, "x.doze.hcl"), `fake "dup" { version = "1" }`)
 
 	_, err := Load(main)
 	if err == nil || !strings.Contains(err.Error(), "already declared") {
