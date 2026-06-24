@@ -23,6 +23,9 @@ func (r *Runtime) Apply(ctx context.Context, name string) error {
 		return err
 	}
 	for _, n := range r.targetNames(name) {
+		if !r.hasStructure(n) {
+			continue // no structure to apply; it boots lazily or via `doze boot`
+		}
 		if err := r.Up(ctx, n); err != nil { // boot + converge (creates/updates)
 			return err
 		}
@@ -32,6 +35,22 @@ func (r *Runtime) Apply(ctx context.Context, name string) error {
 	}
 	st.Outputs = r.outputs()
 	return st.Save(r.statePath)
+}
+
+// hasStructure reports whether an instance's engine manages structural objects
+// (implements engine.Inventory) — the ones apply/destroy act on. Structureless
+// engines (Valkey, Kvrocks, DocumentDB) boot lazily and are skipped by apply.
+func (r *Runtime) hasStructure(name string) bool {
+	decl := r.cfg.Lookup(name)
+	if decl == nil {
+		return false
+	}
+	drv, ok := engine.Lookup(decl.Type)
+	if !ok {
+		return false
+	}
+	_, ok = drv.(engine.Inventory)
+	return ok
 }
 
 // reconcileObjects records the instance's desired objects in st and prunes the
