@@ -141,6 +141,36 @@ func HumanRAM(pid int) string { return HumanBytes(rssBytes(pid)) }
 // RSSBytes returns resident memory for a pid in bytes (0 if unavailable).
 func RSSBytes(pid int) int64 { return rssBytes(pid) }
 
+// ProcSample returns a pid's resident memory (bytes) and current CPU usage
+// (percent, one core = 100) in a single `ps` call. cpu is the kernel's
+// recent-usage value on macOS and ps's lifetime average on Linux. Both are 0 when
+// unavailable.
+func ProcSample(pid int) (rss int64, cpu float64) {
+	if pid <= 0 {
+		return 0, 0
+	}
+	out, err := exec.Command("ps", "-o", "rss=,%cpu=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return rssBytes(pid), 0 // fall back to the RAM-only path
+	}
+	f := strings.Fields(string(out))
+	if len(f) >= 2 {
+		kb, _ := strconv.ParseInt(f[0], 10, 64)
+		cpu, _ = strconv.ParseFloat(f[1], 64)
+		rss = kb * 1024
+	}
+	return rss, cpu
+}
+
+// CPUStr formats a CPU percentage as a compact column value ("" for a non-running
+// process; otherwise e.g. "3%" or "0%").
+func CPUStr(pct float64) string {
+	if pct < 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.0f%%", pct)
+}
+
 // HumanBytes formats a byte count as a compact K/M/G string ("" for <= 0).
 func HumanBytes(b int64) string {
 	if b <= 0 {

@@ -32,6 +32,7 @@ type InstanceView struct {
 	StartedAt time.Time `json:"started_at"`
 	IdleSince time.Time `json:"idle_since,omitempty"` // when Conns hit 0; drives the reap countdown
 	RAM       int64     `json:"ram,omitempty"`        // resident bytes of the backend, 0 when reaped
+	CPU       float64   `json:"cpu,omitempty"`        // CPU usage percent (one core = 100), 0 when reaped
 	Endpoint  string    `json:"endpoint,omitempty"`   // client-facing address
 	URL       string    `json:"url,omitempty"`        // full connection string
 	EnvVar    string    `json:"env_var,omitempty"`    // conventional env var (DATABASE_URL, …)

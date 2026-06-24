@@ -1,6 +1,6 @@
 // Package tui is doze's live control room: an mprocs-style split view with an
 // instance sidebar on the left and, on the right, the selected instance's
-// telemetry (state, RAM/connection sparklines, a reap countdown) above its
+// telemetry (state, CPU, a RAM/connection trace, a reap countdown) above its
 // streaming logs. It refreshes continuously so the picture is always live.
 package tui
 
@@ -1102,6 +1102,7 @@ func (m model) sidebarRow(in control.InstanceView, selected bool, w int, maxRAM 
 func (m model) sidebarTotals(w int) []string {
 	var act, idle, asleep, errc int
 	var total int64
+	var cpuTotal float64
 	for _, in := range m.resp.Instances {
 		switch displayState(in) {
 		case "active", "booting":
@@ -1115,6 +1116,7 @@ func (m model) sidebarTotals(w int) []string {
 		}
 		if in.PID != 0 {
 			total += in.RAM
+			cpuTotal += in.CPU
 		}
 	}
 	counts := stGreen.Render(fmt.Sprintf("●%d", act)) + "  " +
@@ -1123,7 +1125,8 @@ func (m model) sidebarTotals(w int) []string {
 	if errc > 0 {
 		counts += "  " + stErr.Render(fmt.Sprintf("✕%d", errc))
 	}
-	mem := stLabel.Render("mem ") + stAccent.Render(orDash(memStr(total)))
+	mem := stLabel.Render("cpu ") + stAccent.Render(orDash(ui.CPUStr(cpuTotal))) +
+		stFaint.Render("  ") + stLabel.Render("mem ") + stAccent.Render(orDash(memStr(total)))
 	return []string{
 		stFaint.Render(strings.Repeat("─", max(1, w))),
 		" " + counts,
@@ -1172,9 +1175,14 @@ func (m model) viewDetail(v control.InstanceView, w int) string {
 	badge := lipgloss.NewStyle().Foreground(stateColor(st)).Bold(true).Render(displayLabel(st))
 
 	vit := func(label, val string) string { return stLabel.Render(label) + " " + stText.Render(orDash(val)) }
+	cpuVal := ""
+	if v.PID != 0 {
+		cpuVal = ui.CPUStr(v.CPU)
+	}
 	row1 := strings.Join([]string{
 		stLabel.Render("state") + " " + badge,
 		vit("conns", fmt.Sprint(v.Conns)),
+		vit("cpu", cpuVal),
 		vit("pid", pidStr(v.PID)),
 		vit("up", ui.Uptime(v.StartedAt)),
 	}, stFaint.Render("   "))

@@ -65,7 +65,7 @@ doze restart app      # restart one backend (reap + re-boot)
 ## Observability
 
 ```sh
-doze status           # table: engine, colored state, conns, RAM, uptime, endpoint, PID
+doze status           # table: engine, colored state, conns, CPU, RAM, uptime, endpoint, PID
 doze ls               # alias for status
 doze dash             # interactive TUI: select a row, then b boot / d reap / R restart / l logs
 doze logs             # tail the daemon log

@@ -5,9 +5,9 @@ which auto-merges sibling `*.doze.hcl` files; a directory merges its `*.hcl`).
 `--var name=value` (repeatable) overrides a config variable.
 
 Most commands auto-start the background daemon if it isn't running, so you rarely
-manage it directly. The command set has two parallel quartets — **structure**
+manage it directly. The command set has two parallel groups — **structure**
 (`plan`/`apply`/`destroy`/`output`) and **lifecycle** (`start`/`stop`/`restart`) —
-where every lifecycle verb takes an optional instance (no argument = the daemon).
+where `start`/`stop` act on instances (name one, or `--all`).
 
 ## Structure (declarative)
 
@@ -103,7 +103,7 @@ re-boot) — e.g. to pick up changed engine tuning.
 ## Inspect
 
 ### `doze status` (alias `doze ls`)
-List instances and their live state — engine, colored state, connections, RAM,
+List instances and their live state — engine, colored state, connections, CPU, RAM,
 uptime, endpoint, PID. Shows on-disk state when the daemon is stopped; an instance
 whose last apply failed shows `tainted`, and one that failed to boot shows
 `error` with the reason. Output is plain when piped (safe for scripts).
@@ -111,7 +111,7 @@ whose last apply failed shows `tainted`, and one that failed to boot shows
 ### `doze dash`
 Launch the live, interactive TUI — a split "mission control": an instance sidebar
 on the left, and on the right the selected instance's telemetry (state,
-RAM/connection sparklines, a reap countdown) above its **streaming logs**. Select
+CPU, a RAM/connection trace, a reap countdown) above its **streaming logs**. Select
 a row with `↑/↓`, then: `b` boot · `d` reap · `R` restart · `f` toggle log-follow ·
 `/` filter · `r` refresh · `q` quit. Mouse: click to select, scroll the sidebar or
 the logs pane; drag across log lines (or `c` for keyboard copy mode) to copy to

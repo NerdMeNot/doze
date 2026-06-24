@@ -102,7 +102,7 @@ func renderTable(views []control.InstanceView) {
 		fmt.Println("no instances declared")
 		return
 	}
-	header := []string{"NAME", "ENGINE", "VERSION", "STATE", "CONNS", "RAM", "UPTIME", "ENDPOINT", "PID"}
+	header := []string{"NAME", "ENGINE", "VERSION", "STATE", "CONNS", "CPU", "RAM", "UPTIME", "ENDPOINT", "PID"}
 	var rows [][]string
 	var failed []control.InstanceView
 	for _, v := range views {
@@ -121,14 +121,15 @@ func renderTable(views []control.InstanceView) {
 		if flagged {
 			failed = append(failed, v)
 		}
-		pid, ram := "", ""
+		pid, ram, cpu := "", "", ""
 		if v.PID != 0 {
 			pid = strconv.Itoa(v.PID)
-			ram = ui.HumanRAM(v.PID)
+			rss, pct := ui.ProcSample(v.PID)
+			ram, cpu = ui.HumanBytes(rss), ui.CPUStr(pct)
 		}
 		rows = append(rows, []string{
 			v.Name, v.Engine, v.Version, ui.State(state),
-			strconv.Itoa(v.Conns), ram, ui.Uptime(v.StartedAt), v.Endpoint, pid,
+			strconv.Itoa(v.Conns), cpu, ram, ui.Uptime(v.StartedAt), v.Endpoint, pid,
 		})
 	}
 	fmt.Println(ui.Table(header, rows))

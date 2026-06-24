@@ -155,7 +155,7 @@ func (h *handler) Status() control.Response {
 		hydrateEndpoint(&v, eps[inst.Name])
 		v.DataDir = h.dataDir(inst.Name)
 		if inst.PID != 0 {
-			v.RAM = ui.RSSBytes(inst.PID)
+			v.RAM, v.CPU = ui.ProcSample(inst.PID)
 		}
 		resp.Instances = append(resp.Instances, v)
 		seen[inst.Name] = true
