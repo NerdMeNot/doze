@@ -26,6 +26,12 @@ func shellCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			extra := args[1:]
+			// With SetInterspersed(false), a `--` separator (the docker/kubectl
+			// idiom) is passed through as a literal arg; drop it so it doesn't reach
+			// the client as an end-of-options marker.
+			if len(extra) > 0 && extra[0] == "--" {
+				extra = extra[1:]
+			}
 			cfg, err := loadConfig()
 			if err != nil {
 				return err
