@@ -591,10 +591,33 @@ func posErr(parser *hclparse.Parser, rng hcl.Range, summary, detail string) erro
 	}})
 }
 
-// diagError renders HCL diagnostics into a single Go error.
+// diagError renders HCL diagnostics into a single Go error, after augmenting any
+// with a doze-specific fix hint.
 func diagError(parser *hclparse.Parser, diags hcl.Diagnostics) error {
+	addFixHints(diags)
 	var buf bytes.Buffer
 	wr := hcl.NewDiagnosticTextWriter(&buf, parser.Files(), 0, false)
 	_ = wr.WriteDiagnostics(diags)
 	return fmt.Errorf("invalid config:\n%s", buf.String())
+}
+
+// addFixHints appends an actionable fix to HCL grammar errors that are easy to hit
+// but cryptic on their own. The common one for the short health/restart blocks is
+// writing several arguments on one line, which HCL's single-line block grammar
+// forbids — the raw message never says "use multiple lines", so we add that.
+func addFixHints(diags hcl.Diagnostics) {
+	const hint = "\n\nHCL single-line blocks take exactly one argument; put each on its " +
+		"own line instead:\n" +
+		"    health {\n" +
+		"      http     = \"http://localhost:8080/health\"\n" +
+		"      interval = \"2s\"\n" +
+		"    }"
+	for _, d := range diags {
+		if d == nil {
+			continue
+		}
+		if strings.Contains(d.Summary, "single-argument block") && !strings.Contains(d.Detail, "own line") {
+			d.Detail += hint
+		}
+	}
 }

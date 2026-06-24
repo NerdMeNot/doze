@@ -92,6 +92,23 @@ fakeproc "api" {
 	}
 }
 
+func TestSingleLineBlockErrorHasFixHint(t *testing.T) {
+	// A multi-argument single-line block is invalid HCL; doze should turn the
+	// cryptic grammar error into an actionable "put each on its own line" hint.
+	src := `
+fakeproc "api" {
+  health { http = "http://x" interval = "2s" }
+}
+`
+	_, err := Parse([]byte(src), "doze.hcl")
+	if err == nil {
+		t.Fatal("a single-line multi-argument block should be a parse error")
+	}
+	if !strings.Contains(err.Error(), "own line") {
+		t.Errorf("expected a fix hint pointing at multi-line blocks, got:\n%s", err)
+	}
+}
+
 func TestPortlessProcessFallsBackToProxyAddr(t *testing.T) {
 	src := `
 listen = "127.0.0.1:7000"
