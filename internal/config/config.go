@@ -542,6 +542,16 @@ func (c *Config) InstanceAddr(decl *InstanceDecl) (string, error) {
 	if decl.Listen != "" {
 		return decl.Listen, nil
 	}
+	// A supervised process binds its own port; advertise that address instead of a
+	// doze proxy slot (the daemon opens no listener for it). The proxy-port index it
+	// would otherwise occupy is simply left unbound.
+	if drv, ok := engine.Lookup(decl.Type); ok {
+		if pb, ok := drv.(engine.PortBinder); ok {
+			if addr, ok := pb.AdvertisedAddr(engine.Instance{Name: decl.Name, Type: decl.Type, Spec: decl.Spec}); ok {
+				return addr, nil
+			}
+		}
+	}
 	if path, ok := strings.CutPrefix(c.Listen, "unix:"); ok {
 		return "unix:" + filepath.Join(filepath.Dir(path), decl.Name+".sock"), nil
 	}
