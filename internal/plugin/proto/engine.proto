@@ -36,6 +36,7 @@ service Engine {
   rpc AdvertisedAddr(AddrRequest) returns (AddrResponse);   // CAP_PORTBINDER
   rpc EnsureTemplate(EnsureTemplateRequest) returns (Empty); // CAP_TEMPLATER
   rpc CloneTemplate(CloneTemplateRequest) returns (Empty);   // CAP_TEMPLATER
+  rpc WireAddr(Empty) returns (WireAddrResponse);            // CAP_WIRE_FILTER
 }
 
 message Empty {}
@@ -117,6 +118,9 @@ message ConnStringResponse { string env_var = 1; string url = 2; }
 message PlanRequest { Instance instance = 1; Toolchain toolchain = 2; }
 message EnsureTemplateRequest { Toolchain toolchain = 1; string template_dir = 2; }
 message CloneTemplateRequest { string template_dir = 1; string dest_dir = 2; }
+// WireAddrResponse reports the unix socket the plugin listens on for client-fd
+// handoff (SCM_RIGHTS). Empty path means the plugin runs no wire filter.
+message WireAddrResponse { string path = 1; }
 
 message ConvergeRequest { Instance instance = 1; Toolchain toolchain = 2; Endpoint endpoint = 3; }
 message ObjectsRequest { Instance instance = 1; }

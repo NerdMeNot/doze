@@ -41,6 +41,7 @@ const (
 	Engine_AdvertisedAddr_FullMethodName = "/dozeplugin.v1.Engine/AdvertisedAddr"
 	Engine_EnsureTemplate_FullMethodName = "/dozeplugin.v1.Engine/EnsureTemplate"
 	Engine_CloneTemplate_FullMethodName  = "/dozeplugin.v1.Engine/CloneTemplate"
+	Engine_WireAddr_FullMethodName       = "/dozeplugin.v1.Engine/WireAddr"
 )
 
 // EngineClient is the client API for Engine service.
@@ -78,6 +79,7 @@ type EngineClient interface {
 	AdvertisedAddr(ctx context.Context, in *AddrRequest, opts ...grpc.CallOption) (*AddrResponse, error)
 	EnsureTemplate(ctx context.Context, in *EnsureTemplateRequest, opts ...grpc.CallOption) (*Empty, error)
 	CloneTemplate(ctx context.Context, in *CloneTemplateRequest, opts ...grpc.CallOption) (*Empty, error)
+	WireAddr(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*WireAddrResponse, error)
 }
 
 type engineClient struct {
@@ -308,6 +310,16 @@ func (c *engineClient) CloneTemplate(ctx context.Context, in *CloneTemplateReque
 	return out, nil
 }
 
+func (c *engineClient) WireAddr(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*WireAddrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WireAddrResponse)
+	err := c.cc.Invoke(ctx, Engine_WireAddr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngineServer is the server API for Engine service.
 // All implementations must embed UnimplementedEngineServer
 // for forward compatibility.
@@ -343,6 +355,7 @@ type EngineServer interface {
 	AdvertisedAddr(context.Context, *AddrRequest) (*AddrResponse, error)
 	EnsureTemplate(context.Context, *EnsureTemplateRequest) (*Empty, error)
 	CloneTemplate(context.Context, *CloneTemplateRequest) (*Empty, error)
+	WireAddr(context.Context, *Empty) (*WireAddrResponse, error)
 	mustEmbedUnimplementedEngineServer()
 }
 
@@ -418,6 +431,9 @@ func (UnimplementedEngineServer) EnsureTemplate(context.Context, *EnsureTemplate
 }
 func (UnimplementedEngineServer) CloneTemplate(context.Context, *CloneTemplateRequest) (*Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneTemplate not implemented")
+}
+func (UnimplementedEngineServer) WireAddr(context.Context, *Empty) (*WireAddrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WireAddr not implemented")
 }
 func (UnimplementedEngineServer) mustEmbedUnimplementedEngineServer() {}
 func (UnimplementedEngineServer) testEmbeddedByValue()                {}
@@ -836,6 +852,24 @@ func _Engine_CloneTemplate_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Engine_WireAddr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServer).WireAddr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Engine_WireAddr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServer).WireAddr(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Engine_ServiceDesc is the grpc.ServiceDesc for Engine service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -930,6 +964,10 @@ var Engine_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloneTemplate",
 			Handler:    _Engine_CloneTemplate_Handler,
+		},
+		{
+			MethodName: "WireAddr",
+			Handler:    _Engine_WireAddr_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -11,6 +11,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -41,6 +43,33 @@ type Proxy struct {
 	RequireTLS bool
 	// BootTimeout bounds how long a client waits for a cold boot.
 	BootTimeout time.Duration
+
+	// tlsOnce derives the DER cert/key once from TLS so an out-of-process wire
+	// plugin can rebuild the server TLS config to terminate client TLS itself.
+	tlsOnce    sync.Once
+	tlsCertDER []byte
+	tlsKeyDER  []byte
+}
+
+// tlsMaterial returns the leaf cert + private key in DER (PKCS#8) for handing to
+// a wire plugin, derived once from TLS. Both are nil when TLS is unset or can't
+// be marshaled (the plugin then runs without TLS termination).
+func (p *Proxy) tlsMaterial() (certDER, keyDER []byte) {
+	p.tlsOnce.Do(func() {
+		if p.TLS == nil || len(p.TLS.Certificates) == 0 {
+			return
+		}
+		c := p.TLS.Certificates[0]
+		if len(c.Certificate) == 0 {
+			return
+		}
+		key, err := x509.MarshalPKCS8PrivateKey(c.PrivateKey)
+		if err != nil {
+			return
+		}
+		p.tlsCertDER, p.tlsKeyDER = c.Certificate[0], key
+	})
+	return p.tlsCertDER, p.tlsKeyDER
 }
 
 // New constructs a proxy over the given router.
@@ -101,6 +130,29 @@ func (p *Proxy) handle(ctx context.Context, raw net.Conn, name string, drv engin
 	var replay []byte
 	localUnix := raw.LocalAddr().Network() == "unix"
 
+	// Out-of-process wire filter: a plugin engine runs its own preamble/handshake/
+	// splice in its process. Hand it the whole connection; core only lazy-boots and
+	// accounts. ErrNoWireProxy means "not a wire plugin" — fall through to the
+	// generic path below.
+	if wp, ok := drv.(engine.WireProxy); ok {
+		certDER, keyDER := p.tlsMaterial()
+		err := wp.Handoff(ctx, raw, engine.WireHost{
+			Boot:       func(c context.Context) (engine.Endpoint, error) { return p.bootBackend(c, name, drv) },
+			Acquire:    func() { p.router.Acquire(name) },
+			Release:    func() { p.router.Release(name) },
+			RequireTLS: p.RequireTLS,
+			LocalUnix:  localUnix,
+			TLSCert:    certDER,
+			TLSKey:     keyDER,
+		})
+		if !errors.Is(err, engine.ErrNoWireProxy) {
+			if err != nil {
+				p.logf("wire handoff for %q failed: %v", name, err)
+			}
+			return
+		}
+	}
+
 	// Optional protocol-aware preamble (PG startup parse, TLS, cancel routing).
 	if pf, ok := drv.(engine.ProxyFilter); ok {
 		res, err := pf.Preamble(ctx, client, p.cancels, engine.ProxyOpts{
@@ -117,13 +169,7 @@ func (p *Proxy) handle(ctx context.Context, raw net.Conn, name string, drv engin
 		replay = res.Replay
 	}
 
-	budget := p.BootTimeout
-	if sb, ok := drv.(engine.SlowBooter); ok && sb.BootBudget() > budget {
-		budget = sb.BootBudget() // e.g. documentdb's first boot builds a PG cluster + extension
-	}
-	bootCtx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	ep, err := p.router.Boot(bootCtx, name)
+	ep, err := p.bootBackend(ctx, name, drv)
 	if err != nil {
 		p.logf("boot %q failed: %v", name, err)
 		writeError(drv, client, "57P03", "doze: "+err.Error())
@@ -159,6 +205,18 @@ func (p *Proxy) handle(ctx context.Context, raw net.Conn, name string, drv engin
 	p.router.Acquire(name)
 	defer p.router.Release(name)
 	splice(client, upstream, upstreamR)
+}
+
+// bootBackend lazily boots the named instance within the engine's boot budget
+// (a SlowBooter may extend it) and returns its endpoint.
+func (p *Proxy) bootBackend(ctx context.Context, name string, drv engine.Driver) (engine.Endpoint, error) {
+	budget := p.BootTimeout
+	if sb, ok := drv.(engine.SlowBooter); ok && sb.BootBudget() > budget {
+		budget = sb.BootBudget() // e.g. documentdb's first boot builds a PG cluster + extension
+	}
+	bootCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	return p.router.Boot(bootCtx, name)
 }
 
 func writeError(drv engine.Driver, w io.Writer, code, message string) {

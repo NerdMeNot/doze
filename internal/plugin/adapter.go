@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"sync"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -26,6 +27,9 @@ type pluginDriver struct {
 	client     proto.EngineClient
 	engineType string
 	caps       map[string]bool
+
+	wireOnce sync.Once
+	wireSock string // the plugin's fd-handoff socket, resolved once via WireAddr
 }
 
 func newPluginDriver(c proto.EngineClient) engine.Driver {

@@ -23,10 +23,30 @@ import (
 // the host only calls what the driver actually implements.
 type engineServer struct {
 	proto.UnimplementedEngineServer
-	drv engine.Driver
+	drv  engine.Driver
+	wire *wireServer // non-nil when drv runs an out-of-process wire filter
 }
 
-func newEngineServer(drv engine.Driver) *engineServer { return &engineServer{drv: drv} }
+func newEngineServer(drv engine.Driver) *engineServer {
+	s := &engineServer{drv: drv}
+	// A driver that filters its own wire protocol (PG TLS/startup/cancel) runs it
+	// in this plugin process: stand up a unix socket for client-fd handoff so core
+	// never sees per-byte traffic. Best-effort — if it can't listen, WireAddr
+	// returns "" and core falls back to its generic splice.
+	if pf, ok := drv.(engine.ProxyFilter); ok {
+		if w, err := startWireServer(pf); err == nil {
+			s.wire = w
+		}
+	}
+	return s
+}
+
+func (s *engineServer) WireAddr(context.Context, *proto.Empty) (*proto.WireAddrResponse, error) {
+	if s.wire == nil {
+		return &proto.WireAddrResponse{}, nil
+	}
+	return &proto.WireAddrResponse{Path: s.wire.addr()}, nil
+}
 
 func (s *engineServer) Type(context.Context, *proto.Empty) (*proto.TypeResponse, error) {
 	return &proto.TypeResponse{Type: s.drv.Type()}, nil
@@ -48,6 +68,7 @@ const (
 	capSpawner     = "spawner"
 	capVersionless = "versionless"
 	capTemplater   = "templater"
+	capProxyFilter = "proxy_filter"
 )
 
 func (s *engineServer) Capabilities(context.Context, *proto.Empty) (*proto.CapabilitiesResponse, error) {
@@ -85,6 +106,8 @@ func (s *engineServer) Capabilities(context.Context, *proto.Empty) (*proto.Capab
 	add(vl, capVersionless)
 	_, tm := s.drv.(engine.Templater)
 	add(tm, capTemplater)
+	_, pf := s.drv.(engine.ProxyFilter)
+	add(pf, capProxyFilter)
 	return &proto.CapabilitiesResponse{Capabilities: caps}, nil
 }
 
