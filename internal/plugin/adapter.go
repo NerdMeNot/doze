@@ -201,6 +201,25 @@ func (d *pluginDriver) Converge(ctx context.Context, inst engine.Instance, tc en
 	return err
 }
 
+func (d *pluginDriver) Attributes(inst engine.Instance, ep engine.Endpoint) map[string]cty.Value {
+	if !d.has(capAttributer) {
+		return nil
+	}
+	pi, err := instanceToProto(inst)
+	if err != nil {
+		return nil
+	}
+	resp, err := d.client.Attributes(context.Background(), &proto.AttributesRequest{Instance: pi, Endpoint: endpointToProto(ep)})
+	if err != nil {
+		return nil
+	}
+	attrs, err := varsFromJSON(resp.Attrs)
+	if err != nil {
+		return nil
+	}
+	return attrs
+}
+
 func (d *pluginDriver) Objects(inst engine.Instance) []engine.Object {
 	if !d.has(capInventory) {
 		return nil

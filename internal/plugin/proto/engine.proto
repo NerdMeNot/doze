@@ -128,7 +128,7 @@ message ObjectsResponse { repeated Object objects = 1; }
 message PruneRequest { Instance instance = 1; Toolchain toolchain = 2; Endpoint endpoint = 3; repeated Object removed = 4; }
 
 message AttributesRequest { Instance instance = 1; Endpoint endpoint = 2; }
-message AttributesResponse { bytes json = 1; } // map<string, cty-json>
+message AttributesResponse { map<string, bytes> attrs = 1; } // attr name -> cty-json value
 
 message EnvRequest { Instance instance = 1; Endpoint endpoint = 2; }
 message EnvResponse { map<string, string> env = 1; }

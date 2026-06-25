@@ -234,6 +234,22 @@ func (s *engineServer) CloneTemplate(ctx context.Context, req *proto.CloneTempla
 	return &proto.Empty{}, t.CloneTemplate(ctx, req.TemplateDir, req.DestDir)
 }
 
+func (s *engineServer) Attributes(_ context.Context, req *proto.AttributesRequest) (*proto.AttributesResponse, error) {
+	a, ok := s.drv.(engine.Attributer)
+	if !ok {
+		return &proto.AttributesResponse{}, nil
+	}
+	inst, err := instanceFromProto(req.Instance)
+	if err != nil {
+		return nil, err
+	}
+	attrs, err := varsToJSON(a.Attributes(inst, endpointFromProto(req.Endpoint)))
+	if err != nil {
+		return nil, err
+	}
+	return &proto.AttributesResponse{Attrs: attrs}, nil
+}
+
 func (s *engineServer) Converge(ctx context.Context, req *proto.ConvergeRequest) (*proto.Empty, error) {
 	c, ok := s.drv.(engine.Converger)
 	if !ok {
