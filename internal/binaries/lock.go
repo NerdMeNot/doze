@@ -100,6 +100,29 @@ func (l *Lock) Record(eng string, spec engine.VersionSpec, _ engine.Platform, pi
 	}
 }
 
+// Entries returns every (engine, spec) pin in the lock, so the whole set can be
+// shipped to an out-of-process plugin that resolves several component binaries.
+// (engine.LockLister)
+func (l *Lock) Entries() []engine.LockEntry {
+	if l == nil {
+		return nil
+	}
+	var out []engine.LockEntry
+	for eng, specs := range l.Engines {
+		for spec, p := range specs {
+			if p == nil {
+				continue
+			}
+			out = append(out, engine.LockEntry{
+				Engine: eng,
+				Spec:   engine.VersionSpec(spec),
+				Pin:    engine.Pin{Resolved: p.Resolved, Source: p.Source, Hashes: copyMap(p.Hashes)},
+			})
+		}
+	}
+	return out
+}
+
 // Resolved returns the full versions pinned for an engine (across all specs).
 func (l *Lock) Resolved(eng string) []string {
 	var out []string

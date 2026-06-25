@@ -87,6 +87,21 @@ type Locker interface {
 	Record(engine string, spec VersionSpec, plat Platform, pin Pin)
 }
 
+// LockEntry is one (engine, spec) -> pin row of the lock. It lets a whole lock be
+// enumerated and round-tripped (e.g. across the plugin boundary) so composite
+// engines that pin several component binaries don't lose entries.
+type LockEntry struct {
+	Engine string
+	Spec   VersionSpec
+	Pin    Pin
+}
+
+// LockLister is the optional enumeration side of a Locker: the binaries lockfile
+// implements it so callers can ship the relevant pins to an out-of-process plugin.
+type LockLister interface {
+	Entries() []LockEntry
+}
+
 // Endpoint is doze's client-facing listener(s) for one instance plus the
 // backend address the proxy splices to.
 type Endpoint struct {

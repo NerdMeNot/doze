@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclparse"
@@ -45,6 +46,7 @@ const (
 	capRestartable = "restartable"
 	capPortBinder  = "port_binder"
 	capSpawner     = "spawner"
+	capVersionless = "versionless"
 )
 
 func (s *engineServer) Capabilities(context.Context, *proto.Empty) (*proto.CapabilitiesResponse, error) {
@@ -78,6 +80,8 @@ func (s *engineServer) Capabilities(context.Context, *proto.Empty) (*proto.Capab
 	add(pb, capPortBinder)
 	_, sp := s.drv.(engine.Spawner)
 	add(sp, capSpawner)
+	_, vl := s.drv.(engine.Versionless)
+	add(vl, capVersionless)
 	return &proto.CapabilitiesResponse{Capabilities: caps}, nil
 }
 
@@ -139,16 +143,12 @@ func (s *engineServer) DecodeConfig(_ context.Context, req *proto.DecodeRequest)
 }
 
 func (s *engineServer) Resolve(ctx context.Context, req *proto.ResolveRequest) (*proto.ResolveResponse, error) {
-	lk := &capturingLocker{in: pinFromProto(req.Locked), inOK: req.Locked != nil}
+	lk := newMapLocker(lockEntriesFromProto(req.Locked))
 	tc, err := s.drv.Resolve(ctx, engine.VersionSpec(req.Spec), platformFromProto(req.Platform), lk, binaries.NewManager(dozeHome()))
 	if err != nil {
 		return nil, err
 	}
-	pin := lk.out
-	if !lk.recorded {
-		pin = engine.Pin{Resolved: tc.Full}
-	}
-	return &proto.ResolveResponse{Toolchain: toolchainToProto(tc), Pin: pinToProto(pin)}, nil
+	return &proto.ResolveResponse{Toolchain: toolchainToProto(tc), Recorded: lockEntriesToProto(lk.recorded())}, nil
 }
 
 func (s *engineServer) Provision(ctx context.Context, req *proto.ProvisionRequest) (*proto.Empty, error) {
@@ -323,21 +323,58 @@ func (s *engineServer) AdvertisedAddr(_ context.Context, req *proto.AddrRequest)
 	return &proto.AddrResponse{Addr: addr, Ok: has}, nil
 }
 
-// capturingLocker feeds the host-supplied locked pin to drv.Resolve and captures
-// whatever the driver records, so the server can return the new pin to core (which
-// owns doze.lock).
-type capturingLocker struct {
-	in       engine.Pin
-	inOK     bool
-	out      engine.Pin
-	recorded bool
+// mapLocker is a full in-memory Locker seeded with the host-supplied pins. It
+// keys on (engine, spec) — so a composite that pins several component binaries
+// reads and records each independently — and reports every Record back so core
+// (which owns doze.lock) can merge them. Replaces the old single-pin model that
+// collapsed a composite's pins to whichever it recorded last.
+type mapLocker struct {
+	pins  map[string]engine.Pin // "engine\x00spec" -> pin
+	order []string              // keys recorded, in order, deduped
 }
 
-func (l *capturingLocker) Get(string, engine.VersionSpec, engine.Platform) (engine.Pin, bool) {
-	return l.in, l.inOK
+func lockKey(eng string, spec engine.VersionSpec) string { return eng + "\x00" + string(spec) }
+
+func newMapLocker(seed []engine.LockEntry) *mapLocker {
+	l := &mapLocker{pins: make(map[string]engine.Pin, len(seed))}
+	for _, e := range seed {
+		l.pins[lockKey(e.Engine, e.Spec)] = e.Pin
+	}
+	return l
 }
-func (l *capturingLocker) Record(_ string, _ engine.VersionSpec, _ engine.Platform, pin engine.Pin) {
-	l.out, l.recorded = pin, true
+
+func (l *mapLocker) Get(eng string, spec engine.VersionSpec, _ engine.Platform) (engine.Pin, bool) {
+	p, ok := l.pins[lockKey(eng, spec)]
+	return p, ok
+}
+
+func (l *mapLocker) Record(eng string, spec engine.VersionSpec, _ engine.Platform, pin engine.Pin) {
+	k := lockKey(eng, spec)
+	if _, seen := l.pins[k]; !seen {
+		l.order = append(l.order, k)
+	} else if !contains(l.order, k) {
+		l.order = append(l.order, k)
+	}
+	l.pins[k] = pin
+}
+
+// recorded returns the entries the driver recorded this Resolve, in record order.
+func (l *mapLocker) recorded() []engine.LockEntry {
+	out := make([]engine.LockEntry, 0, len(l.order))
+	for _, k := range l.order {
+		eng, spec, _ := strings.Cut(k, "\x00")
+		out = append(out, engine.LockEntry{Engine: eng, Spec: engine.VersionSpec(spec), Pin: l.pins[k]})
+	}
+	return out
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // dozeHome is where the shared binary cache + lock live; a plugin fetches its

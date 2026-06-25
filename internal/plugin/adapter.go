@@ -28,7 +28,7 @@ type pluginDriver struct {
 	caps       map[string]bool
 }
 
-func newPluginDriver(c proto.EngineClient) *pluginDriver {
+func newPluginDriver(c proto.EngineClient) engine.Driver {
 	d := &pluginDriver{client: c, caps: map[string]bool{}}
 	ctx := context.Background()
 	if resp, err := c.Type(ctx, &proto.Empty{}); err == nil {
@@ -39,8 +39,19 @@ func newPluginDriver(c proto.EngineClient) *pluginDriver {
 			d.caps[cp] = true
 		}
 	}
+	// Versionless changes config behavior by interface *presence* (no version
+	// required), so it can't be a no-op method — wrap to add it only when advertised.
+	if d.caps[capVersionless] {
+		return versionlessDriver{d}
+	}
 	return d
 }
+
+// versionlessDriver adds engine.Versionless to a plugin driver that advertised it
+// (embedding keeps every other Driver/Spawner/capability method).
+type versionlessDriver struct{ *pluginDriver }
+
+func (versionlessDriver) Versionless() {}
 
 func (d *pluginDriver) has(cap string) bool { return d.caps[cap] }
 
@@ -48,18 +59,25 @@ func (d *pluginDriver) has(cap string) bool { return d.caps[cap] }
 func (d *pluginDriver) Type() string { return d.engineType }
 
 func (d *pluginDriver) Resolve(ctx context.Context, spec engine.VersionSpec, plat engine.Platform, lk engine.Locker, _ engine.Fetcher) (engine.Toolchain, error) {
-	var locked *proto.Pin
-	if pin, ok := lk.Get(d.engineType, spec, plat); ok {
-		locked = pinToProto(pin)
+	// Ship the whole lock so the plugin can read pins for every component binary
+	// it resolves (a composite pins several); fall back to just this engine's pin
+	// if the Locker can't enumerate.
+	var locked []engine.LockEntry
+	if ll, ok := lk.(engine.LockLister); ok {
+		locked = ll.Entries()
+	} else if pin, ok := lk.Get(d.engineType, spec, plat); ok {
+		locked = []engine.LockEntry{{Engine: d.engineType, Spec: spec, Pin: pin}}
 	}
 	resp, err := d.client.Resolve(ctx, &proto.ResolveRequest{
-		Spec: string(spec), Platform: platformToProto(plat), Locked: locked,
+		Spec: string(spec), Platform: platformToProto(plat), Locked: lockEntriesToProto(locked),
 	})
 	if err != nil {
 		return engine.Toolchain{}, err
 	}
-	if resp.Pin != nil {
-		lk.Record(d.engineType, spec, plat, pinFromProto(resp.Pin))
+	// Record each pin the plugin reported under its own (engine, spec) key, so a
+	// composite's components don't collapse into one and core's doze.lock is exact.
+	for _, e := range lockEntriesFromProto(resp.Recorded) {
+		lk.Record(e.Engine, e.Spec, plat, e.Pin)
 	}
 	return toolchainFromProto(resp.Toolchain), nil
 }

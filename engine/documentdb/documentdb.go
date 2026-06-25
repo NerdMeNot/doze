@@ -211,6 +211,68 @@ func (Driver) Spawn(ctx context.Context, inst engine.Instance, tc engine.Toolcha
 	return newComposite(ferret, pg), nil
 }
 
+// Plan implements engine.Spawner: documentdb is a two-process unit. Core's executor
+// starts the private Postgres (gated on pg_isready), runs the CREATE EXTENSION hook
+// once it is ready, then starts the FerretDB gateway (gated on its mongo socket) and
+// supervises the pair as one unit. This is the composite path used when documentdb
+// runs as an out-of-process plugin (Spawn above remains the in-tree fallback).
+func (Driver) Plan(_ context.Context, inst engine.Instance, tc engine.Toolchain) (engine.SpawnPlan, error) {
+	pgData := pgDataDir(inst.DataDir)
+	pgSock := pgSocketDir(inst.SocketDir)
+	if err := os.MkdirAll(pgSock, 0o700); err != nil {
+		return engine.SpawnPlan{}, fmt.Errorf("creating postgres socket dir: %w", err)
+	}
+	if err := clearStaleLock(inst, pgData, pgSock); err != nil {
+		return engine.SpawnPlan{}, err
+	}
+	port, err := freePort()
+	if err != nil {
+		return engine.SpawnPlan{}, fmt.Errorf("allocating postgres port: %w", err)
+	}
+	debugPort, err := freePort(port)
+	if err != nil {
+		return engine.SpawnPlan{}, fmt.Errorf("allocating ferretdb debug port: %w", err)
+	}
+	stateDir := filepath.Join(inst.DataDir, "ferretdb")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return engine.SpawnPlan{}, fmt.Errorf("creating ferretdb state dir: %w", err)
+	}
+	socket := BackendSocketPath(inst.SocketDir)
+	_ = os.Remove(socket)
+
+	postgres := engine.SpawnSpec{
+		Name: "postgres",
+		Bin:  tc.Path("postgres"),
+		Args: []string{"-D", pgData, "-k", pgSock, "-p", strconv.Itoa(port)},
+		Ready: &engine.Ready{
+			Kind:   "exec",
+			Target: fmt.Sprintf("%s -h %s -p %d -d postgres", tc.Path("pg_isready"), pgSock, port),
+		},
+		// Install the DocumentDB extension chain once Postgres is ready, before
+		// FerretDB connects.
+		Hooks: []string{fmt.Sprintf(
+			`%s -h %s -p %d -U postgres -d postgres -v ON_ERROR_STOP=1 -X -q -c "CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;"`,
+			tc.Path("psql"), pgSock, port,
+		)},
+	}
+	ferretdb := engine.SpawnSpec{
+		Name:  "ferretdb",
+		Bin:   tc.Path("ferretdb"),
+		After: []string{"postgres"},
+		Env: append(os.Environ(),
+			"FERRETDB_POSTGRESQL_URL="+backendURL(pgSock, port),
+			"FERRETDB_LISTEN_UNIX="+socket,
+			"FERRETDB_LISTEN_ADDR=",
+			"FERRETDB_DEBUG_ADDR=127.0.0.1:"+strconv.Itoa(debugPort),
+			"FERRETDB_STATE_DIR="+stateDir,
+			"FERRETDB_TELEMETRY=disable",
+			"FERRETDB_AUTH=false",
+		),
+		Ready: &engine.Ready{Kind: "socket", Target: socket},
+	}
+	return engine.SpawnPlan{Specs: []engine.SpawnSpec{postgres, ferretdb}}, nil
+}
+
 // WaitReady implements engine.Driver: ready once FerretDB's mongo socket accepts
 // connections. Postgres readiness was already established inside Spawn.
 func (Driver) WaitReady(ctx context.Context, inst engine.Instance, _ engine.Toolchain, p engine.Process) error {

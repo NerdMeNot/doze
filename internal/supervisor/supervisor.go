@@ -15,6 +15,11 @@ import (
 	"time"
 )
 
+// waitDelay bounds how long cmd.Wait lingers for stdout/stderr to drain after the
+// process itself has exited, before closing the pipes and returning. It exists so
+// orphaned grandchildren holding the log pipe can't wedge exit detection.
+const waitDelay = 3 * time.Second
+
 // Process is a handle to one running backend process.
 type Process struct {
 	mu        sync.Mutex
@@ -37,6 +42,15 @@ func Start(cmd *exec.Cmd) (*Process, error) {
 	// backend directly; on Linux also ask the kernel to signal it if the daemon
 	// dies, so a crash never orphans a backend.
 	cmd.SysProcAttr = sysProcAttr()
+	// Bound the post-exit I/O wait. cmd.Wait blocks until the stdout/stderr pipes
+	// are fully closed, which means until every process that inherited them exits —
+	// not just our direct child. A backend that forks children (Postgres spawns
+	// background workers like the pg_cron launcher) can be killed harshly, leaving
+	// orphans that hold the pipe open; without WaitDelay, Wait would hang forever
+	// and the supervisor would never notice the process died (so a Composite would
+	// never tear down its siblings). WaitDelay makes Wait return shortly after the
+	// process itself exits, closing the pipes out from under any lingering orphans.
+	cmd.WaitDelay = waitDelay
 
 	if err := cmd.Start(); err != nil {
 		return nil, err

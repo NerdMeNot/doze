@@ -65,6 +65,28 @@ func pinFromProto(p *proto.Pin) engine.Pin {
 	return engine.Pin{Resolved: p.Resolved, Source: p.Source, Hashes: p.Hashes}
 }
 
+func lockEntriesToProto(es []engine.LockEntry) []*proto.LockEntry {
+	if len(es) == 0 {
+		return nil
+	}
+	out := make([]*proto.LockEntry, 0, len(es))
+	for _, e := range es {
+		out = append(out, &proto.LockEntry{Engine: e.Engine, Spec: string(e.Spec), Pin: pinToProto(e.Pin)})
+	}
+	return out
+}
+
+func lockEntriesFromProto(es []*proto.LockEntry) []engine.LockEntry {
+	if len(es) == 0 {
+		return nil
+	}
+	out := make([]engine.LockEntry, 0, len(es))
+	for _, e := range es {
+		out = append(out, engine.LockEntry{Engine: e.Engine, Spec: engine.VersionSpec(e.Spec), Pin: pinFromProto(e.Pin)})
+	}
+	return out
+}
+
 func endpointToProto(e engine.Endpoint) *proto.Endpoint {
 	return &proto.Endpoint{UnixSocket: e.UnixSocket, TcpAddr: e.TCPAddr, Backend: e.Backend}
 }

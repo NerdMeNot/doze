@@ -42,6 +42,10 @@ message Empty {}
 message Platform { string os = 1; string arch = 2; string triple = 3; }
 message Toolchain { string engine = 1; string full = 2; string bin_dir = 3; map<string, string> tools = 4; }
 message Pin { string resolved = 1; string source = 2; map<string, string> hashes = 3; }
+// LockEntry is one (engine, spec) -> pin row of the lockfile. Resolve round-trips
+// a whole set of these so a composite engine's component pins (e.g. documentdb +
+// ferretdb) each land under their own key instead of collapsing to one.
+message LockEntry { string engine = 1; string spec = 2; Pin pin = 3; }
 message Endpoint { string unix_socket = 1; string tcp_addr = 2; string backend = 3; }
 message Dep { string name = 1; string engine = 2; string socket_dir = 3; string backend = 4; string url = 5; }
 
@@ -95,8 +99,8 @@ message DecodeRequest {
 }
 message DecodeResponse { bytes spec = 1; } // the plugin's gob-encoded config
 
-message ResolveRequest { string spec = 1; Platform platform = 2; Pin locked = 3; }
-message ResolveResponse { Toolchain toolchain = 1; Pin pin = 2; }
+message ResolveRequest { string spec = 1; Platform platform = 2; repeated LockEntry locked = 3; }
+message ResolveResponse { Toolchain toolchain = 1; repeated LockEntry recorded = 2; }
 
 message ProvisionRequest { Instance instance = 1; Toolchain toolchain = 2; }
 message ProvisionedRequest { string data_dir = 1; }
