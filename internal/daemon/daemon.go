@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/control"
-	"github.com/nerdmenot/doze/internal/endpoints"
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/proxy"
-	"github.com/nerdmenot/doze/internal/runtime"
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze/internal/config"
+	"github.com/doze-dev/doze/internal/control"
+	"github.com/doze-dev/doze/internal/endpoints"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/proxy"
+	"github.com/doze-dev/doze/internal/runtime"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 // ControlSocketPath returns the admin socket path for a project.

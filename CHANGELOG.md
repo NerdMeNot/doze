@@ -57,4 +57,4 @@ and reaps when idle.
   `init`, `up`, `down`, `status`/`ls`, `psql`, `doctor`, and styled CLI output.
 - Licensed under Apache 2.0.
 
-[Unreleased]: https://github.com/NerdMeNot/doze/commits/main
+[Unreleased]: https://github.com/doze-dev/doze/commits/main

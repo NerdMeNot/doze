@@ -118,7 +118,7 @@ doze never runs a system install or an emulation. It resolves each
 
 1. **`DOZE_<ENGINE>_BINDIR`** — an explicit bin directory you point at (CI, local builds).
 2. A **content-addressed cache** under `~/.doze/<engine>/<version>-<platform>/bin`.
-3. A **verified download** from the [doze-binaries](https://github.com/NerdMeNot/doze-binaries) mirror, SHA-256 checked.
+3. A **verified download** from the [doze-binaries](https://github.com/doze-dev/doze-binaries) mirror, SHA-256 checked.
 
 The exact version each instance resolved to, and its checksum, are recorded in a
 committed **`doze.lock`** — so a teammate's clone and your CI run byte-identical

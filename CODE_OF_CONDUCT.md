@@ -26,7 +26,7 @@ permission, and other conduct that could reasonably be considered inappropriate.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the maintainers via a
-[private security advisory](https://github.com/NerdMeNot/doze/security/advisories/new)
+[private security advisory](https://github.com/doze-dev/doze/security/advisories/new)
 or by contacting a maintainer directly. All complaints will be reviewed and
 investigated promptly and fairly.
 

@@ -19,9 +19,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nerdmenot/doze/internal/control"
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze/internal/control"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 // ── palette / themes ────────────────────────────────────────────────────────

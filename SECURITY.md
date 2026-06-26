@@ -5,7 +5,7 @@
 Please report security issues **privately** — do not open a public issue.
 
 Use GitHub's private vulnerability reporting:
-[**Report a vulnerability**](https://github.com/NerdMeNot/doze/security/advisories/new)
+[**Report a vulnerability**](https://github.com/doze-dev/doze/security/advisories/new)
 (Security → Advisories → Report a vulnerability on the repo).
 
 Please include a description, reproduction steps, affected version

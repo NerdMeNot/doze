@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nerdmenot/doze/internal/state"
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze/internal/state"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 // renderPlan prints a structural plan: changes grouped by instance, colorized

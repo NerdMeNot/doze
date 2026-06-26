@@ -18,12 +18,12 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/nerdmenot/doze-sdk/binaries"
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/registry"
-	"github.com/nerdmenot/doze/internal/state"
-	"github.com/nerdmenot/doze/internal/supervisor"
+	"github.com/doze-dev/doze-sdk/binaries"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/config"
+	"github.com/doze-dev/doze/internal/registry"
+	"github.com/doze-dev/doze/internal/state"
+	"github.com/doze-dev/doze/internal/supervisor"
 )
 
 // nominalPort is the default socket-naming port for unix-only backends; drivers

@@ -25,7 +25,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
-	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/doze-dev/doze-sdk/engine"
 )
 
 // Defaults for fields the user did not specify.
@@ -126,6 +126,7 @@ type hclModules struct {
 type hclModule struct {
 	Name    string `hcl:"name,label"`
 	Version string `hcl:"version,optional"`
+	Source  string `hcl:"source,optional"`
 }
 
 // Load reads and validates the doze configuration at path, with no variable
@@ -458,9 +459,10 @@ func (cfg *Config) decodeTLS(parser *hclparse.Parser, block *hcl.Block, ctx *hcl
 // engine plugins from and which versions to pin. It is applied to the plugin
 // resolver before instance decode (see modulesConfigurer).
 type ModulesConfig struct {
-	Mirror   string            // module mirror base (overrides DOZE_MODULES_MIRROR)
+	Mirror   string            // registry base (overrides DOZE_MODULES_MIRROR)
 	Enabled  bool              // fetch plugin modules (true also when a mirror is set)
 	Versions map[string]string // engine type -> pinned module version ("" = default channel)
+	Sources  map[string]string // engine type -> source address override ("" = nerdmenot/<type>)
 }
 
 // modulesConfigurer, when registered (by cmd/doze), is handed the decoded
@@ -482,9 +484,11 @@ func (cfg *Config) decodeModules(parser *hclparse.Parser, block *hcl.Block, ctx 
 		Mirror:   m.Mirror,
 		Enabled:  m.Enabled || m.Mirror != "",
 		Versions: map[string]string{},
+		Sources:  map[string]string{},
 	}
 	for _, md := range m.Modules {
 		mc.Versions[md.Name] = md.Version
+		mc.Sources[md.Name] = md.Source
 	}
 	cfg.Modules = mc
 	return nil

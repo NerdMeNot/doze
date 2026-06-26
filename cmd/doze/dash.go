@@ -3,8 +3,8 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/daemon"
-	"github.com/nerdmenot/doze/internal/tui"
+	"github.com/doze-dev/doze/internal/daemon"
+	"github.com/doze-dev/doze/internal/tui"
 )
 
 func dashCmd() *cobra.Command {

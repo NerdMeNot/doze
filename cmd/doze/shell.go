@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/endpoints"
+	"github.com/doze-dev/doze/internal/endpoints"
 )
 
 func shellCmd() *cobra.Command {

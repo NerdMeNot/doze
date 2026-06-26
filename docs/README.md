@@ -51,5 +51,5 @@ Read these in order to build a working mental model:
 - **[Architecture](ARCHITECTURE.md)** — the engine-driver contract and how the
   generic core, proxy, runtime, and daemon fit together (for contributors).
 
-The companion [`NerdMeNot/doze-binaries`](https://github.com/NerdMeNot/doze-binaries)
+The companion [`doze-dev/doze-binaries`](https://github.com/doze-dev/doze-binaries)
 repo builds and publishes the engine binaries doze downloads.

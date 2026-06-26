@@ -14,7 +14,7 @@ seeing as we go.
 doze is a single binary:
 
 ```sh
-go install github.com/nerdmenot/doze/cmd/doze@latest
+go install github.com/doze-dev/doze/cmd/doze@latest
 doze version
 ```
 

@@ -3,7 +3,7 @@ package main
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/state"
+	"github.com/doze-dev/doze/internal/state"
 )
 
 func planCmd() *cobra.Command {

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/registry"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/registry"
 )
 
 // testRuntime is a minimal Runtime for exercising the restart-cancellation logic

@@ -3,8 +3,8 @@ package process
 import (
 	"context"
 
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/health"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/health"
 )
 
 // CheckHealth implements engine.HealthChecker: one probe pass for the periodic

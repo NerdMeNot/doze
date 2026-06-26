@@ -6,8 +6,8 @@ package main
 import (
 	"encoding/gob"
 
-	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
-	"github.com/nerdmenot/doze/engine/process"
+	dozeplugin "github.com/doze-dev/doze-sdk/plugin"
+	"github.com/doze-dev/doze/engine/process"
 )
 
 func main() {

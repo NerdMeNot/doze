@@ -11,13 +11,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze-sdk/binaries"
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze-sdk/plugin"
-	"github.com/nerdmenot/doze/engine/process"
-	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/modules"
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze-sdk/binaries"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze-sdk/plugin"
+	"github.com/doze-dev/doze/engine/process"
+	"github.com/doze-dev/doze/internal/config"
+	"github.com/doze-dev/doze/internal/modules"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 var (
@@ -46,7 +46,7 @@ func main() {
 		// Apply the modules{} block (mirror/enable/version pins) before any driver
 		// is resolved. Fetching stays off unless the env mirror or the block enables it.
 		config.SetModulesConfigurer(func(mc config.ModulesConfig) {
-			modMgr.Configure(mc.Mirror, mc.Enabled, mc.Versions)
+			modMgr.Configure(mc.Mirror, mc.Enabled, mc.Versions, mc.Sources)
 		})
 		resolvers = append(resolvers, modMgr.Lookup)
 	}

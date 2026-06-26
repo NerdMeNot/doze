@@ -6,9 +6,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/health"
-	"github.com/nerdmenot/doze/internal/supervisor"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/health"
+	"github.com/doze-dev/doze/internal/supervisor"
 )
 
 // executePlan runs a driver's SpawnPlan and returns a supervised process: it

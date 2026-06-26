@@ -9,8 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze-sdk/binaries"
-	"github.com/nerdmenot/doze/internal/runtime"
+	"github.com/doze-dev/doze-sdk/binaries"
+	"github.com/doze-dev/doze/internal/runtime"
 )
 
 func binariesCmd() *cobra.Command {

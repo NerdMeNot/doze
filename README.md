@@ -10,7 +10,7 @@ needs in one file; doze fetches the real engines, boots each the moment somethin
 connects, and puts it back to sleep when you walk away. At rest, your whole
 backend is one ~15 MB daemon.
 
-[![CI](https://github.com/NerdMeNot/doze/actions/workflows/ci.yml/badge.svg)](https://github.com/NerdMeNot/doze/actions/workflows/ci.yml)
+[![CI](https://github.com/doze-dev/doze/actions/workflows/ci.yml/badge.svg)](https://github.com/doze-dev/doze/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](#install)
 
@@ -72,7 +72,7 @@ out of your way the moment you stop using it.
 
 ```sh
 # 1. Install it (one binary, Go 1.26+)
-go install github.com/nerdmenot/doze/cmd/doze@latest
+go install github.com/doze-dev/doze/cmd/doze@latest
 
 # 2. Describe what you need
 doze init                      # writes a starter doze.hcl
@@ -153,16 +153,16 @@ WSL2 works.)
 
 ```sh
 # Recommended: install the CLI
-go install github.com/nerdmenot/doze/cmd/doze@latest
+go install github.com/doze-dev/doze/cmd/doze@latest
 
 # Or build from a clone
-git clone https://github.com/NerdMeNot/doze && cd doze
+git clone https://github.com/doze-dev/doze && cd doze
 go build -o doze ./cmd/doze
 ```
 
 Engine binaries are fetched and cached automatically on first use. They're built
 and published by the companion repo
-**[NerdMeNot/doze-binaries](https://github.com/NerdMeNot/doze-binaries)**; see
+**[doze-dev/doze-binaries](https://github.com/doze-dev/doze-binaries)**; see
 [Managing binaries](docs/BINARIES.md) for the mirror format and self-hosting.
 
 ## Documentation

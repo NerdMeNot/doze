@@ -110,4 +110,4 @@ Reset one instance's data, or wipe the whole project's state — see
 ## Still stuck?
 
 Open an issue with `doze doctor` output, the relevant `doze logs` lines, your
-`doze.hcl`, and your OS/arch: <https://github.com/NerdMeNot/doze/issues>.
+`doze.hcl`, and your OS/arch: <https://github.com/doze-dev/doze/issues>.

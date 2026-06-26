@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 func outputCmd() *cobra.Command {

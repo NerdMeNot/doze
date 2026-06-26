@@ -10,8 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze-sdk/binaries"
-	"github.com/nerdmenot/doze/internal/modules"
+	"github.com/doze-dev/doze-sdk/binaries"
+	"github.com/doze-dev/doze/internal/modules"
 )
 
 func modulesCmd() *cobra.Command {
@@ -42,7 +42,7 @@ func modulesListCmd() *cobra.Command {
 				if mm, err = modules.NewManager(dozeHome()); err != nil {
 					return err
 				}
-				mm.Configure(mc.Mirror, mc.Enabled, mc.Versions)
+				mm.Configure(mc.Mirror, mc.Enabled, mc.Versions, mc.Sources)
 				fmt.Printf("module mirror: %s\n\n", mm.Mirror())
 			} else {
 				fmt.Printf("module fetching is off (set DOZE_MODULES_MIRROR or a modules{} block to enable)\n\n")
@@ -104,7 +104,7 @@ func modulesWhichCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			mm.Configure(mc.Mirror, mc.Enabled, mc.Versions)
+			mm.Configure(mc.Mirror, mc.Enabled, mc.Versions, mc.Sources)
 			mm.SetLogger(stderrLogger)
 			mm.UseLock(func() string { return filepath.Join(configDir(cfg.Path()), binaries.LockFileName) })
 			path, err := mm.Resolve(context.Background(), engineType, mc.Versions[engineType])

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nerdmenot/doze/internal/registry"
+	"github.com/doze-dev/doze/internal/registry"
 )
 
 // Request is a command sent from the CLI to the daemon.

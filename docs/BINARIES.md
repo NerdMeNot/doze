@@ -16,7 +16,7 @@ For a given `(engine, version)`, doze tries, cheapest first:
    `~/.doze/postgres/16.14.0-aarch64-apple-darwin/bin`. Keyed by the full version
    and target triple in the shared home, so patches never collide and every
    project on the machine reuses one download.
-3. **Download** — from the [doze-binaries](https://github.com/NerdMeNot/doze-binaries)
+3. **Download** — from the [doze-binaries](https://github.com/doze-dev/doze-binaries)
    mirror (or your own), verified against a checksum and extracted into the cache.
 
 doze deliberately has **no system fallback**. It only ever runs binaries it
@@ -68,7 +68,7 @@ doze binaries available [engine]      # versions the mirror offers (installed/pi
 ## Hosting your own mirror
 
 The default mirror is the companion repo
-[`NerdMeNot/doze-binaries`](https://github.com/NerdMeNot/doze-binaries), which
+[`doze-dev/doze-binaries`](https://github.com/doze-dev/doze-binaries), which
 builds the engines in CI and publishes them (append-only). **Each engine has its
 own rolling release** (tag = the engine name), so a slow or failing engine never
 holds up the rest; doze resolves each engine from `…/releases/download/<engine>`.
@@ -117,7 +117,7 @@ three-part version).
 ### Building and publishing
 
 Building, packaging, and publishing the binaries — and generating `index.yaml` —
-lives in the [`doze-binaries`](https://github.com/NerdMeNot/doze-binaries) repo,
+lives in the [`doze-binaries`](https://github.com/doze-dev/doze-binaries) repo,
 not in doze itself: it's a different cadence, toolchain, and review surface.
 Fork it (or build your own) to control your supply chain. It builds only what
 upstreams lack (Postgres, Kvrocks, Valkey/macOS), re-hosts the rest, and is

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/registry"
-	"github.com/nerdmenot/doze/internal/runtime"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/config"
+	"github.com/doze-dev/doze/internal/registry"
+	"github.com/doze-dev/doze/internal/runtime"
 )
 
 // fakeProc is a no-op engine.Process for tests. Wait blocks until Stop, like a

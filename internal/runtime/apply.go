@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nerdmenot/doze-sdk/engine"
-	"github.com/nerdmenot/doze/internal/state"
+	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze/internal/state"
 )
 
 // Apply converges the named instance (or all, when name is "") to its declared

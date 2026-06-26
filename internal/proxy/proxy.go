@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/doze-dev/doze-sdk/engine"
 )
 
 // Router is the subset of the runtime the proxy needs.

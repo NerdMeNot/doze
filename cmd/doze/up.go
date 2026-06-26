@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/control"
-	"github.com/nerdmenot/doze/internal/daemon"
-	"github.com/nerdmenot/doze/internal/ui"
+	"github.com/doze-dev/doze/internal/config"
+	"github.com/doze-dev/doze/internal/control"
+	"github.com/doze-dev/doze/internal/daemon"
+	"github.com/doze-dev/doze/internal/ui"
 )
 
 // bootBudget caps how long a single instance may take to come up (a process whose
