@@ -13,8 +13,8 @@ import (
 
 	"github.com/nerdmenot/doze/engine/sns" // its init registers the configured Driver (incl. childEnv) + snssrv factory
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
-	dozeplugin "github.com/nerdmenot/doze/internal/plugin"
+	"github.com/nerdmenot/doze-sdk/engine"
+	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
 )
 
 func main() {

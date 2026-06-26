@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 func TestValkeyBlockDecode(t *testing.T) {

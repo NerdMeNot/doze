@@ -2,7 +2,7 @@ package state
 
 import (
 	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 // ChangeKind is the action a plan entry represents.

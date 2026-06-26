@@ -18,10 +18,10 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/nerdmenot/doze/internal/binaries"
+	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze/internal/endpoints"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/registry"
 	"github.com/nerdmenot/doze/internal/state"
 	"github.com/nerdmenot/doze/internal/supervisor"

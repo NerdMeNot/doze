@@ -8,7 +8,7 @@ import (
 	"encoding/gob"
 
 	"github.com/nerdmenot/doze/engine/documentdb"
-	dozeplugin "github.com/nerdmenot/doze/internal/plugin"
+	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
 )
 
 func main() {

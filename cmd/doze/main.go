@@ -19,11 +19,11 @@ import (
 	"github.com/nerdmenot/doze/engine/sns"
 	"github.com/nerdmenot/doze/engine/sqs"
 	_ "github.com/nerdmenot/doze/engine/valkey" // register the valkey driver
-	"github.com/nerdmenot/doze/internal/binaries"
+	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/modules"
-	"github.com/nerdmenot/doze/internal/plugin"
+	"github.com/nerdmenot/doze-sdk/plugin"
 	"github.com/nerdmenot/doze/internal/ui"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/state"
 )
 

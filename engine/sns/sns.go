@@ -9,7 +9,7 @@ package sns
 
 import (
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 
 	_ "github.com/nerdmenot/doze/internal/snssrv" // register the sns service factory
 )

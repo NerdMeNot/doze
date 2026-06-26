@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/s3srv"
 )
 

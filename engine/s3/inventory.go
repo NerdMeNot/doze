@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 // Objects implements engine.Inventory: each declared bucket is a tracked object.

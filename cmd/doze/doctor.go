@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/binaries"
+	"github.com/nerdmenot/doze-sdk/binaries"
 )
 
 func doctorCmd() *cobra.Command {

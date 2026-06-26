@@ -14,8 +14,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nerdmenot/doze/internal/binaries"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/binaries"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 // DefaultModuleRoot is the doze-modules release base each module's index.yaml +

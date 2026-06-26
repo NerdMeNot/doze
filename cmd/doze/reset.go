@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerdmenot/doze/internal/binaries"
+	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze/internal/control"
 	"github.com/nerdmenot/doze/internal/daemon"

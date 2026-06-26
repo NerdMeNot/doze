@@ -7,7 +7,7 @@ import (
 	"encoding/gob"
 
 	"github.com/nerdmenot/doze/engine/kvrocks"
-	dozeplugin "github.com/nerdmenot/doze/internal/plugin"
+	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
 )
 
 func main() {

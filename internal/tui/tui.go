@@ -20,7 +20,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nerdmenot/doze/internal/control"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/ui"
 )
 

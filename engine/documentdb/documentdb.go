@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/supervisor"
 )
 

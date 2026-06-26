@@ -6,7 +6,7 @@ package sqs
 
 import (
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 
 	_ "github.com/nerdmenot/doze/internal/sqssrv" // register the sqs service factory
 )

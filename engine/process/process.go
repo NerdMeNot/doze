@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 func init() { engine.Register(Driver{}) }

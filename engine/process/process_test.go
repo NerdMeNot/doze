@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/hcl/v2/hclparse"
 
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 func decode(t *testing.T, src string) (*Config, error) {

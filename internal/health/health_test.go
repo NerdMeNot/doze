@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 )
 
 func TestProbeHTTP(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 
 	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze/internal/endpoints"
-	"github.com/nerdmenot/doze/internal/engine"
+	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/proxy"
 	"github.com/nerdmenot/doze/internal/runtime"
 )

@@ -12,8 +12,8 @@ import (
 
 	"github.com/nerdmenot/doze/engine/s3" // its init registers the configured Driver + s3srv factory
 	"github.com/nerdmenot/doze/internal/awslocal"
-	"github.com/nerdmenot/doze/internal/engine"
-	dozeplugin "github.com/nerdmenot/doze/internal/plugin"
+	"github.com/nerdmenot/doze-sdk/engine"
+	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
 )
 
 func main() {
