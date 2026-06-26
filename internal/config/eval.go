@@ -59,12 +59,13 @@ func mergedVars(global, stamp *hcl.EvalContext) map[string]cty.Value {
 }
 
 func (cfg *Config) evaluate(parser *hclparse.Parser, pending []*pendingInstance, ctx *hcl.EvalContext) error {
+	// An engine type is "known" (a resource reference root, not var/local) if some
+	// declared instance uses it — config can't enumerate engines (they're modules),
+	// so the declared set is the source of truth for reference resolution.
 	knownTypes := map[string]bool{}
-	for _, t := range engine.Types() {
-		knownTypes[t] = true
-	}
 	byName := map[string]*pendingInstance{}
 	for _, p := range pending {
+		knownTypes[p.decl.Type] = true
 		byName[p.decl.Name] = p
 	}
 

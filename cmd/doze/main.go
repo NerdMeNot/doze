@@ -18,7 +18,6 @@ import (
 	"github.com/nerdmenot/doze/engine/s3"
 	"github.com/nerdmenot/doze/engine/sns"
 	"github.com/nerdmenot/doze/engine/sqs"
-	_ "github.com/nerdmenot/doze/engine/valkey" // register the valkey driver
 	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze-sdk/engine"

@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 // Converge implements engine.Converger: create declared topics and subscriptions

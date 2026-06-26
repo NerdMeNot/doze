@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 // Objects implements engine.Inventory: each declared queue is a tracked object,

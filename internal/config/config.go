@@ -155,14 +155,11 @@ func LoadWithVars(path string, cliVars map[string]string) (*Config, error) {
 		}
 		hclFiles = append(hclFiles, hf)
 	}
-	if err := checkBlockTypes(parser, hclFiles); err != nil {
-		return nil, err
-	}
 	autoVars, err := loadAutoVars(configDirOf(path))
 	if err != nil {
 		return nil, err
 	}
-	return buildConfig(parser, hcl.MergeFiles(hclFiles), primary, &varInputs{cli: cliVars, auto: autoVars})
+	return buildConfig(parser, hcl.MergeFiles(hclFiles), primary, &varInputs{cli: cliVars, auto: autoVars}, engineBlockTypes(hclFiles))
 }
 
 // configDirOf returns the directory that holds the config (and its sibling
@@ -212,16 +209,15 @@ func Parse(src []byte, filename string) (*Config, error) {
 	if diags.HasErrors() {
 		return nil, diagError(parser, diags)
 	}
-	if err := checkBlockTypes(parser, []*hcl.File{file}); err != nil {
-		return nil, err
-	}
-	return buildConfig(parser, file.Body, filename, nil)
+	return buildConfig(parser, file.Body, filename, nil, engineBlockTypes([]*hcl.File{file}))
 }
 
-// buildConfig validates a (possibly merged) HCL body into a Config.
-func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string, inputs *varInputs) (*Config, error) {
-	// The schema is built from the registered engines so each engine block type
-	// is recognized; unknown block types become positioned diagnostics.
+// buildConfig validates a (possibly merged) HCL body into a Config. engineTypes is
+// the set of engine block types declared in the source (every non-reserved labeled
+// block); each is accepted into the schema and validated to a real driver later.
+func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string, inputs *varInputs, engineTypes []string) (*Config, error) {
+	// Accept every declared engine block type — config can't enumerate engines
+	// (they're out-of-process modules), so it trusts the type and resolves it later.
 	schema := &hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "listen"}, {Name: "home"}, {Name: "data_dir"},
@@ -235,7 +231,7 @@ func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string, inp
 			{Type: "output", LabelNames: []string{"name"}},
 		},
 	}
-	for _, t := range engine.Types() {
+	for _, t := range engineTypes {
 		schema.Blocks = append(schema.Blocks, hcl.BlockHeaderSchema{Type: t, LabelNames: []string{"name"}})
 	}
 
@@ -365,36 +361,36 @@ func emptyIfNil(m map[string]cty.Value) map[string]cty.Value {
 // checkBlockTypes reports the first unknown top-level block type with a friendly,
 // positioned diagnostic (with a "did you mean" suggestion) — better than HCL's
 // generic "Unsupported block type". Operates on native-syntax bodies.
-func checkBlockTypes(parser *hclparse.Parser, files []*hcl.File) error {
-	known := map[string]bool{"defaults": true, "tls": true, "modules": true, "variable": true, "locals": true, "output": true}
-	var candidates []string
-	for _, t := range engine.Types() {
-		known[t] = true
-		candidates = append(candidates, t)
-	}
+// reservedBlocks are the non-engine top-level block types. Every other labeled
+// top-level block is an engine instance — its type isn't validated here (engines
+// are out-of-process modules config can't enumerate), only at driver resolution.
+var reservedBlocks = map[string]bool{
+	"defaults": true, "tls": true, "modules": true,
+	"variable": true, "locals": true, "output": true,
+}
+
+// engineBlockTypes returns the distinct engine block types declared across the
+// files (every top-level labeled block that isn't a reserved keyword). They seed
+// the decode schema and reference resolution; whether a type actually resolves to
+// a driver (in-tree or a fetched module) is checked when the instance is built.
+func engineBlockTypes(files []*hcl.File) []string {
+	seen := map[string]bool{}
+	var out []string
 	for _, f := range files {
 		body, ok := f.Body.(*hclsyntax.Body)
 		if !ok {
 			continue
 		}
 		for _, blk := range body.Blocks {
-			if known[blk.Type] {
+			if reservedBlocks[blk.Type] || seen[blk.Type] {
 				continue
 			}
-			detail := "not a known block type (expected defaults, tls, or an engine like " + strings.Join(candidates, ", ") + ")"
-			if s := nearest(blk.Type, candidates); s != "" {
-				detail = fmt.Sprintf("did you mean %q?", s)
-			}
-			rng := blk.TypeRange
-			return diagError(parser, hcl.Diagnostics{{
-				Severity: hcl.DiagError,
-				Summary:  fmt.Sprintf("unknown block type %q", blk.Type),
-				Detail:   detail,
-				Subject:  &rng,
-			}})
+			seen[blk.Type] = true
+			out = append(out, blk.Type)
 		}
 	}
-	return nil
+	sort.Strings(out)
+	return out
 }
 
 // nearest returns the closest candidate within a small edit distance, or "".
@@ -557,7 +553,13 @@ func (cfg *Config) buildPending(parser *hclparse.Parser, block *hcl.Block, restB
 	}
 	drv, ok := engine.Lookup(block.Type)
 	if !ok {
-		return nil, posErr(parser, block.DefRange, fmt.Sprintf("no driver registered for engine %q", block.Type), "")
+		// The type passed the schema (any labeled block is a candidate engine) but
+		// resolves to no driver — not built in, and no module provides it.
+		detail := "no engine of this type is built in or provided by a module"
+		if s := nearest(block.Type, engine.Types()); s != "" {
+			detail = fmt.Sprintf("did you mean %q?", s)
+		}
+		return nil, posErr(parser, block.DefRange, fmt.Sprintf("unknown engine %q", block.Type), detail)
 	}
 	if c.Version == "" {
 		// Engines that ship inside doze (the local-AWS services) have no version.

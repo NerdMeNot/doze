@@ -8,8 +8,8 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 // Converge implements engine.Converger: create each declared queue (idempotent).

@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nerdmenot/doze/engine/sns" // its init registers the configured Driver (incl. childEnv) + snssrv factory
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
 	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
+	"github.com/nerdmenot/doze/engine/sns" // its init registers the configured Driver (incl. childEnv) + snssrv factory
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 func main() {

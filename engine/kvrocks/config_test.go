@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/config"
 )
 
 func TestKvrocksBlockDecode(t *testing.T) {

@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 // Admin: expose each declared topic's subscription count and let the dash/CLI

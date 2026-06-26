@@ -6,8 +6,8 @@ package main
 import (
 	"encoding/gob"
 
-	"github.com/nerdmenot/doze/engine/postgres"
 	dozeplugin "github.com/nerdmenot/doze-sdk/plugin"
+	"github.com/nerdmenot/doze/engine/postgres"
 )
 
 func main() {

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nerdmenot/doze/internal/awslocal"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/awslocal"
 )
 
 // Admin: expose each declared queue's depth and the data actions the dash/CLI run
