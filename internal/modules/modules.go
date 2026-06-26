@@ -181,9 +181,12 @@ func (m *Manager) Lookup(engineType string) (path string, env []string, ok bool)
 	return p, nil, true
 }
 
-// Enabled reports whether module fetching is active. Until doze-modules is
-// published it is opt-in via DOZE_MODULES_MIRROR, so the public (not-yet-existing)
-// default mirror doesn't add a failed round-trip per engine type.
+// Enabled reports whether the DOZE_MODULES_MIRROR env opts module fetching on (a
+// modules{} block can also enable it). Fetching is opt-in by design: the default
+// is the compiled-in engines, so running doze from source uses local engine code
+// (fetched modules would shadow it) and dev/CI/offline need no network. A project
+// turns modules on explicitly via the env mirror or `modules { enabled = true }`,
+// which then resolves against the public doze-modules releases.
 func Enabled() bool { return os.Getenv("DOZE_MODULES_MIRROR") != "" }
 
 // Mirror returns the configured module mirror base.
