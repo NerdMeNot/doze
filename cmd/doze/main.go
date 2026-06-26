@@ -14,7 +14,6 @@ import (
 	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze-sdk/plugin"
-	_ "github.com/nerdmenot/doze/engine/documentdb" // register the documentdb driver
 	"github.com/nerdmenot/doze/engine/postgres"
 	"github.com/nerdmenot/doze/engine/process"
 	"github.com/nerdmenot/doze/internal/config"
