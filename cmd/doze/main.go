@@ -14,7 +14,6 @@ import (
 	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze-sdk/plugin"
-	"github.com/nerdmenot/doze/engine/postgres"
 	"github.com/nerdmenot/doze/engine/process"
 	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze/internal/modules"
@@ -29,7 +28,6 @@ var (
 func main() {
 	// Surface engine convergence warnings on stderr (the daemon redirects its
 	// stderr to the log file). Importing engine/postgres also registers the driver.
-	postgres.Logf = stderrLogger
 	process.Logf = stderrLogger
 
 	// Out-of-process engine modules: resolve a plugin binary (local DOZE_<TYPE>_PLUGIN
