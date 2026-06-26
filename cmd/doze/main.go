@@ -11,17 +11,14 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nerdmenot/doze-sdk/binaries"
+	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze-sdk/plugin"
 	_ "github.com/nerdmenot/doze/engine/documentdb" // register the documentdb driver
 	"github.com/nerdmenot/doze/engine/postgres"
 	"github.com/nerdmenot/doze/engine/process"
-	"github.com/nerdmenot/doze/engine/s3"
-	"github.com/nerdmenot/doze/engine/sns"
-	"github.com/nerdmenot/doze/engine/sqs"
-	"github.com/nerdmenot/doze-sdk/binaries"
 	"github.com/nerdmenot/doze/internal/config"
-	"github.com/nerdmenot/doze-sdk/engine"
 	"github.com/nerdmenot/doze/internal/modules"
-	"github.com/nerdmenot/doze-sdk/plugin"
 	"github.com/nerdmenot/doze/internal/ui"
 )
 
@@ -35,9 +32,6 @@ func main() {
 	// stderr to the log file). Importing engine/postgres also registers the driver.
 	postgres.Logf = stderrLogger
 	process.Logf = stderrLogger
-	s3.Logf = stderrLogger
-	sqs.Logf = stderrLogger
-	sns.Logf = stderrLogger
 
 	// Out-of-process engine modules: resolve a plugin binary (local DOZE_<TYPE>_PLUGIN
 	// override first, then a fetched-from-doze-modules module), keep it warm for
@@ -112,7 +106,6 @@ func rootCmd() *cobra.Command {
 		ephemeralCmd(),
 		versionCmd(),
 		// Internal (hidden)
-		serveInternalCmd(),
 	)
 	return root
 }
