@@ -11,11 +11,13 @@ package modules
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -321,6 +323,80 @@ func (m *Manager) Lookup(engineType string) (path string, env []string, ok bool)
 // in-tree, e.g. process). Such types are never fetched as modules.
 func isInTree(engineType string) bool {
 	return slices.Contains(engine.Types(), engineType)
+}
+
+// Inspection is the result of inspecting a registry source without launching it.
+type Inspection struct {
+	Source    string
+	Namespace string
+	Name      string
+	Version   string // resolved full version
+	Platforms []PlatformStatus
+}
+
+// PlatformStatus is one artifact's per-triple provenance.
+type PlatformStatus struct {
+	Triple string
+	URL    string
+	SHA256 string
+	Signed bool // sig present AND verifies against the namespace publisher key
+}
+
+// Inspect fetches a source's publisher key (pinning it trust-on-first-use) and its
+// module index, then reports each platform artifact and whether its signature
+// verifies — the same check Resolve enforces before running a module, surfaced for
+// `doze modules info`. It downloads no archives.
+func (m *Manager) Inspect(source, version string) (*Inspection, error) {
+	if version == "" {
+		version = DefaultVersion
+	}
+	ns, name, err := splitSource(source)
+	if err != nil {
+		return nil, err
+	}
+	lock := m.loadLock()
+	bm, err := m.nsManager(ns, lock)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	key := m.keys[ns]
+	m.mu.Unlock()
+
+	man, err := bm.Manifest(name)
+	if err != nil {
+		return nil, err
+	}
+	em, ok := man.Engines[name]
+	if !ok {
+		return nil, fmt.Errorf("registry index for %s has no engine %q", source, name)
+	}
+	full, ok := em.Versions[version]
+	if !ok {
+		full = version // allow an exact full version
+	}
+	insp := &Inspection{Source: source, Namespace: ns, Name: name, Version: full}
+	for triple, art := range em.Artifacts[full] {
+		insp.Platforms = append(insp.Platforms, PlatformStatus{
+			Triple: triple, URL: art.URL, SHA256: art.SHA256,
+			Signed: verifyArtifactSig(key, art.SHA256, art.Sig),
+		})
+	}
+	sort.Slice(insp.Platforms, func(i, j int) bool { return insp.Platforms[i].Triple < insp.Platforms[j].Triple })
+	return insp, nil
+}
+
+// verifyArtifactSig reports whether sigB64 is a valid signature over the artifact's
+// hex sha256 by the namespace publisher key.
+func verifyArtifactSig(key ed25519.PublicKey, sha256hex, sigB64 string) bool {
+	if key == nil || sigB64 == "" || sha256hex == "" {
+		return false
+	}
+	sig, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		return false
+	}
+	return ed25519.Verify(key, []byte(strings.ToLower(sha256hex)), sig)
 }
 
 // Enabled reports whether module fetching is on. It is default-on: core compiles

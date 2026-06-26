@@ -23,8 +23,58 @@ func modulesCmd() *cobra.Command {
 			"local DOZE_<TYPE>_PLUGIN override, or a plugin module fetched from\n" +
 			"doze-modules (DOZE_MODULES_MIRROR) and cached under ~/.doze/modules.",
 	}
-	cmd.AddCommand(modulesListCmd(), modulesWhichCmd())
+	cmd.AddCommand(modulesListCmd(), modulesWhichCmd(), modulesInfoCmd())
 	return cmd
+}
+
+func modulesInfoCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "info <source> [version]",
+		Aliases: []string{"verify"},
+		Short:   "Fetch a registry source's index and verify its signatures",
+		Long: "info fetches the module index for a registry source (e.g. doze/postgres),\n" +
+			"pins the namespace's publisher key trust-on-first-use, and reports each\n" +
+			"platform artifact and whether its ed25519 signature verifies — the same\n" +
+			"check doze enforces before running a module. No archives are downloaded.",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			source := args[0]
+			version := ""
+			if len(args) > 1 {
+				version = args[1]
+			}
+			// Pure inspection of a registry source — no project config is loaded, so
+			// it has no side effects on the working directory's stack. The mirror comes
+			// from DOZE_MODULES_MIRROR (else the public registry).
+			mm, err := modules.NewManager(dozeHome())
+			if err != nil {
+				return err
+			}
+			mm.SetLogger(stderrLogger)
+
+			insp, err := mm.Inspect(source, version)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("source:  %s\nversion: %s\nmirror:  %s\n\n", insp.Source, insp.Version, mm.Mirror())
+			w := tabwriter.NewWriter(os.Stdout, 0, 2, 3, ' ', 0)
+			fmt.Fprintln(w, "PLATFORM\tSIGNATURE\tARCHIVE")
+			allSigned := true
+			for _, p := range insp.Platforms {
+				sig := "✓ signed"
+				if !p.Signed {
+					sig = "✗ UNSIGNED"
+					allSigned = false
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\n", p.Triple, sig, p.URL)
+			}
+			_ = w.Flush()
+			if !allSigned {
+				return fmt.Errorf("one or more artifacts are not validly signed by %s's publisher key", insp.Namespace)
+			}
+			return nil
+		},
+	}
 }
 
 func modulesListCmd() *cobra.Command {
