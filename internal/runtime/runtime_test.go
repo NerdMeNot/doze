@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze-sdk/engine"
+	"github.com/nerdmenot/doze/internal/config"
 	"github.com/nerdmenot/doze/internal/registry"
 	"github.com/nerdmenot/doze/internal/runtime"
 )

@@ -82,7 +82,6 @@ func rootCmd() *cobra.Command {
 		outputCmd(),
 		// Run / connect
 		runCmd(),
-		envCmd(),
 		shellCmd(),
 		// Lifecycle (daemon, or a single instance)
 		upCmd(),
