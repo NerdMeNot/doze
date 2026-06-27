@@ -120,9 +120,11 @@ func nodeLabel(cfg *config.Config, views map[string]control.InstanceView, name s
 		line += " " + ui.Muted(engineType)
 	}
 	line += "  " + word
-	if running && awakeState(v.State) && v.Endpoint != "" {
+	// Show the endpoint whenever the daemon knows it — even asleep, so you know
+	// where to connect (connecting wakes it). Conn count only when actually awake.
+	if running && v.Endpoint != "" {
 		line += ui.Muted("  " + v.Endpoint)
-		if v.Conns > 0 {
+		if awakeState(v.State) && v.Conns > 0 {
 			line += ui.Muted(fmt.Sprintf("  (%d conn)", v.Conns))
 		}
 	}
