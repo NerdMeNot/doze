@@ -400,6 +400,75 @@ func Enabled() bool { return os.Getenv("DOZE_MODULES") != "off" }
 // Mirror returns the configured registry base.
 func (m *Manager) Mirror() string { m.mu.Lock(); defer m.mu.Unlock(); return m.base }
 
+// Catalog is the registry's machine-readable index (served at <base>/index.json):
+// every published namespace and the modules it offers. It's the discovery source
+// for `doze modules search` and the init wizard — no module list is compiled in.
+type Catalog struct {
+	Namespaces map[string]CatalogNamespace `json:"namespaces"`
+}
+
+// CatalogNamespace is one publisher's slice of the catalog.
+type CatalogNamespace struct {
+	Official bool                     `json:"official"`
+	Modules  map[string]CatalogModule `json:"modules"`
+}
+
+// CatalogModule is one published module's discovery facts (all author-declared).
+type CatalogModule struct {
+	Source         string   `json:"source"`
+	Tagline        string   `json:"tagline"`
+	Category       string   `json:"category"`
+	EngineVersions []string `json:"engineVersions"`
+	Port           int      `json:"port"`
+	Label          string   `json:"label"`
+	Platforms      []string `json:"platforms"`
+	Signed         bool     `json:"signed"`
+}
+
+// Catalog fetches and parses the registry's index.json catalog.
+func (m *Manager) Catalog() (*Catalog, error) {
+	url := strings.TrimRight(m.base, "/") + "/index.json"
+	body, err := binaries.NewManager(m.home).Fetch(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching registry catalog (%s): %w", url, err)
+	}
+	var c Catalog
+	if err := json.Unmarshal(body, &c); err != nil {
+		return nil, fmt.Errorf("parsing registry catalog: %w", err)
+	}
+	return &c, nil
+}
+
+// CatalogEntry is a flattened catalog module with its namespace, for listing.
+type CatalogEntry struct {
+	CatalogModule
+	Namespace string
+	Name      string
+	Official  bool
+}
+
+// CatalogModules returns every module across all namespaces, official first then
+// alphabetical — the flat list `doze modules search` and the wizard render.
+func (m *Manager) CatalogModules() ([]CatalogEntry, error) {
+	cat, err := m.Catalog()
+	if err != nil {
+		return nil, err
+	}
+	var out []CatalogEntry
+	for ns, n := range cat.Namespaces {
+		for name, mod := range n.Modules {
+			out = append(out, CatalogEntry{CatalogModule: mod, Namespace: ns, Name: name, Official: n.Official})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Official != out[j].Official {
+			return out[i].Official
+		}
+		return out[i].Source < out[j].Source
+	})
+	return out, nil
+}
+
 // Cached returns the path + version of a cached build of the module for engine
 // type, for the host platform (newest by directory listing), or ok=false if none
 // is cached. It does no network — for inspection (`doze modules`).

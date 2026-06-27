@@ -23,8 +23,60 @@ func modulesCmd() *cobra.Command {
 			"local DOZE_<TYPE>_PLUGIN override, or a plugin module fetched from\n" +
 			"doze-modules (DOZE_MODULES_MIRROR) and cached under ~/.doze/modules.",
 	}
-	cmd.AddCommand(modulesListCmd(), modulesWhichCmd(), modulesInfoCmd())
+	cmd.AddCommand(modulesListCmd(), modulesWhichCmd(), modulesInfoCmd(), modulesSearchCmd())
 	return cmd
+}
+
+func modulesSearchCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "search [query]",
+		Aliases: []string{"available"},
+		Short:   "Search the registry for published modules",
+		Long: "search lists the modules published to the registry (the live index.json\n" +
+			"catalog), optionally filtered by a query against the source/tagline. This is\n" +
+			"how you discover what's available — no module list is built into doze.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			q := ""
+			if len(args) == 1 {
+				q = strings.ToLower(args[0])
+			}
+			mm, err := modules.NewManager(dozeHome())
+			if err != nil {
+				return err
+			}
+			mm.SetLogger(stderrLogger)
+			entries, err := mm.CatalogModules()
+			if err != nil {
+				return err
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 2, 3, ' ', 0)
+			fmt.Fprintln(w, "SOURCE\tENGINE VERSIONS\t\tDESCRIPTION")
+			shown := 0
+			for _, e := range entries {
+				if q != "" && !strings.Contains(strings.ToLower(e.Source+" "+e.Tagline+" "+e.Category), q) {
+					continue
+				}
+				vers := "built-in"
+				if len(e.EngineVersions) > 0 {
+					vers = strings.Join(e.EngineVersions, " ")
+				}
+				badge := ""
+				if e.Official {
+					badge = "official"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", e.Source, vers, badge, e.Tagline)
+				shown++
+			}
+			_ = w.Flush()
+			if shown == 0 {
+				fmt.Printf("no modules match %q in %s\n", q, mm.Mirror())
+				return nil
+			}
+			fmt.Printf("\nuse one: declare the engine type, or `modules { <type> { source = \"<ns>/<name>\" } }`\n")
+			return nil
+		},
+	}
 }
 
 func modulesInfoCmd() *cobra.Command {
