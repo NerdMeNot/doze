@@ -116,13 +116,22 @@ func TestMissingPortIsAClearError(t *testing.T) {
 	// doze does not auto-assign ports; a portless instance must fail with a clear,
 	// actionable message at load time (not a silent fallback or an opaque bind error).
 	dir := t.TempDir()
-	writeFile(t, dir, "doze.hcl", `fakeproc "worker" {}`)
+	writeFile(t, dir, "doze.hcl", `fake "db" { version = 1 }`) // a proxied engine needs a port
 	_, err := Load(dir + "/doze.hcl")
 	if err == nil {
-		t.Fatal("a portless instance should error on load")
+		t.Fatal("a portless proxied engine should error on load")
 	}
 	if !strings.Contains(err.Error(), "no port") || !strings.Contains(err.Error(), "port = ") {
 		t.Errorf("error should name the missing port + the fix, got:\n%s", err)
+	}
+}
+
+func TestPortlessProcessIsAllowed(t *testing.T) {
+	// A supervised process with no endpoint (a background worker) needs no port.
+	dir := t.TempDir()
+	writeFile(t, dir, "doze.hcl", `fakeproc "worker" {}`)
+	if _, err := Load(dir + "/doze.hcl"); err != nil {
+		t.Fatalf("a portless worker process should load fine: %v", err)
 	}
 }
 

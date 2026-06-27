@@ -36,6 +36,9 @@ func For(cfg *config.Config) ([]Endpoint, error) {
 		if err != nil {
 			return nil, err
 		}
+		if addr == "" {
+			continue // a portless process (worker) has no client-facing endpoint
+		}
 		ep := Endpoint{Name: decl.Name, Engine: decl.Type, Address: addr}
 		if drv, ok := engine.Lookup(decl.Type); ok {
 			eep := engineEndpoint(addr)

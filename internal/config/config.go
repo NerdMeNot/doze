@@ -189,6 +189,9 @@ func (cfg *Config) validatePorts() error {
 		if err != nil {
 			return err // "<type> "<name>" has no port — add `port = NNNN`"
 		}
+		if addr == "" {
+			continue // a portless process (worker) binds nothing — can't collide
+		}
 		if other, dup := addrs[addr]; dup {
 			return fmt.Errorf("port conflict: %q and %q both use %s — give each instance a unique port", other, decl.Name, addr)
 		}
@@ -671,6 +674,14 @@ func (c *Config) InstanceAddr(decl *InstanceDecl) (string, error) {
 	// auto-assign ports — be explicit, like you would for any real service.
 	if decl.Port != 0 {
 		return net.JoinHostPort("127.0.0.1", strconv.Itoa(decl.Port)), nil
+	}
+	// A supervised process may be portless — a background worker with no endpoint
+	// binds nothing and doze fronts nothing, so it needs no port. Any other engine
+	// must declare one: doze opens a proxy listener for it and won't guess a port.
+	if drv, ok := engine.Lookup(decl.Type); ok {
+		if _, isProcess := drv.(engine.PortBinder); isProcess {
+			return "", nil
+		}
 	}
 	return "", fmt.Errorf("%s %q has no port — add `port = NNNN` to the block "+
 		"(e.g. port = 5432); doze does not auto-assign ports", decl.Type, decl.Name)
