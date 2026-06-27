@@ -59,7 +59,10 @@ func (fakeProcDriver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, _ string
 
 func TestPortBinderAdvertisesOwnAddress(t *testing.T) {
 	src := `
-fake "db" { version = 1 }
+fake "db" {
+  version = 1
+  port    = 5432
+}
 fakeproc "api" {
   port = 9090
   env  = { DATABASE_URL = fake.db.url }
@@ -109,21 +112,31 @@ fakeproc "api" {
 	}
 }
 
-func TestPortlessProcessFallsBackToProxyAddr(t *testing.T) {
-	src := `
-listen = "127.0.0.1:7000"
-fakeproc "worker" {}
-`
-	cfg, err := Parse([]byte(src), "doze.hcl")
-	if err != nil {
-		t.Fatalf("parse: %v", err)
+func TestMissingPortIsAClearError(t *testing.T) {
+	// doze does not auto-assign ports; a portless instance must fail with a clear,
+	// actionable message at load time (not a silent fallback or an opaque bind error).
+	dir := t.TempDir()
+	writeFile(t, dir, "doze.hcl", `fakeproc "worker" {}`)
+	_, err := Load(dir + "/doze.hcl")
+	if err == nil {
+		t.Fatal("a portless instance should error on load")
 	}
-	addr, err := cfg.InstanceAddr(cfg.Lookup("worker"))
-	if err != nil {
-		t.Fatalf("InstanceAddr: %v", err)
+	if !strings.Contains(err.Error(), "no port") || !strings.Contains(err.Error(), "port = ") {
+		t.Errorf("error should name the missing port + the fix, got:\n%s", err)
 	}
-	// No port → no advertised address → it keeps a (never-bound) proxy slot.
-	if !strings.HasPrefix(addr, "127.0.0.1:70") {
-		t.Errorf("portless worker addr = %q, want a proxy-range fallback", addr)
+}
+
+func TestPortConflictIsAClearError(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "doze.hcl", `
+fakeproc "a" { port = 8080 }
+fakeproc "b" { port = 8080 }
+`)
+	_, err := Load(dir + "/doze.hcl")
+	if err == nil {
+		t.Fatal("two instances on the same port should error")
+	}
+	if !strings.Contains(err.Error(), "port conflict") || !strings.Contains(err.Error(), "8080") {
+		t.Errorf("error should name the conflict + both instances, got:\n%s", err)
 	}
 }

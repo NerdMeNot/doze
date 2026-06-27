@@ -283,7 +283,13 @@ func topoOrder(parser *hclparse.Parser, pending []*pendingInstance, byName map[s
 func (cfg *Config) attributesFor(p *pendingInstance) (cty.Value, error) {
 	addr, err := cfg.InstanceAddr(p.decl)
 	if err != nil {
-		return cty.NilVal, err
+		// No port yet (parse is lenient). Expose identity only; the address-derived
+		// attributes appear once a port is set. LoadWithVars.validatePorts reports
+		// the missing port clearly before any command runs.
+		return cty.ObjectVal(map[string]cty.Value{
+			"name":   cty.StringVal(p.decl.Name),
+			"engine": cty.StringVal(p.decl.Type),
+		}), nil
 	}
 	ep := engineEndpoint(addr)
 	inst := engine.Instance{

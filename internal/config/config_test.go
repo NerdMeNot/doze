@@ -340,6 +340,7 @@ variable "n" {
 }
 fake "a" {
   version = 1
+  port    = 7001
   color   = "${var.env}-${var.n}"
 }
 `)
@@ -576,9 +577,15 @@ func TestSiblingDozeHCLFilesAreMerged(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "doze.hcl", `
 defaults { idle_timeout = "1m" }
-fake "anchor" { version = 1 }
+fake "anchor" {
+  version = 1
+  port    = 7001
+}
 `)
-	writeFile(t, dir, "extra.doze.hcl", `fake "sibling" { version = 1 }`)
+	writeFile(t, dir, "extra.doze.hcl", `fake "sibling" {
+  version = 1
+  port    = 7002
+}`)
 	writeFile(t, dir, "ignored.hcl", `fake "nope" { version = 1 }`) // not *.doze.hcl
 
 	cfg, err := Load(dir + "/doze.hcl")

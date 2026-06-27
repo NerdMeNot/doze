@@ -22,10 +22,16 @@ func TestLoadMergesSiblingDozeHCL(t *testing.T) {
 	main := filepath.Join(dir, "doze.hcl")
 	write(t, main, `
 defaults { idle_timeout = "1m" }
-fake "a" { version = "1" }
+fake "a" {
+  version = "1"
+  port    = 7001
+}
 `)
 	write(t, filepath.Join(dir, "extra.doze.hcl"), `
-fake "b" { version = "1" }
+fake "b" {
+  version = "1"
+  port    = 7002
+}
 `)
 
 	cfg, err := Load(main)
@@ -42,8 +48,14 @@ fake "b" { version = "1" }
 
 func TestLoadDirectory(t *testing.T) {
 	dir := t.TempDir()
-	write(t, filepath.Join(dir, "00-root.hcl"), `fake "a" { version = "1" }`)
-	write(t, filepath.Join(dir, "10-more.hcl"), `fake "b" { version = "1" }`)
+	write(t, filepath.Join(dir, "00-root.hcl"), `fake "a" {
+  version = "1"
+  port    = 7001
+}`)
+	write(t, filepath.Join(dir, "10-more.hcl"), `fake "b" {
+  version = "1"
+  port    = 7002
+}`)
 
 	cfg, err := Load(dir)
 	if err != nil {

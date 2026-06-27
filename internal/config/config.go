@@ -89,7 +89,8 @@ type InstanceDecl struct {
 	Type    string              // engine type / block keyword ("postgres")
 	Name    string              // block label
 	Version engine.VersionSpec  // "16" (major) or "16.14" (exact)
-	Listen  string              // optional per-instance endpoint override
+	Listen  string              // optional full endpoint override ("host:port")
+	Port    int                 // the client-facing port (required unless Listen is set)
 	Spec    engine.EngineConfig // engine-specific config (decoded by the driver)
 	// Deps are the other declared instances this one must boot first (e.g. an sns
 	// instance referencing sqs.jobs), each with a readiness condition. Derived
@@ -108,6 +109,7 @@ type InstanceDecl struct {
 type common struct {
 	Version string   `hcl:"version,optional"`
 	Listen  string   `hcl:"listen,optional"`
+	Port    int      `hcl:"port,optional"`
 	Remain  hcl.Body `hcl:",remain"`
 }
 
@@ -163,7 +165,36 @@ func LoadWithVars(path string, cliVars map[string]string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildConfig(parser, hcl.MergeFiles(hclFiles), primary, &varInputs{cli: cliVars, auto: autoVars}, engineBlockTypes(hclFiles))
+	cfg, err := buildConfig(parser, hcl.MergeFiles(hclFiles), primary, &varInputs{cli: cliVars, auto: autoVars}, engineBlockTypes(hclFiles))
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.validatePorts(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// validatePorts enforces the explicit-port rule for a loaded config: every enabled
+// instance must resolve to a client-facing address, and no two may share one. It
+// runs on the CLI load path (not bare Parse) so a missing port or a collision is a
+// clear, named error — never a silent auto-assignment or an opaque bind failure.
+func (cfg *Config) validatePorts() error {
+	addrs := map[string]string{} // address -> instance name
+	for _, decl := range cfg.Instances {
+		if !decl.Enabled {
+			continue // paused instances bind nothing
+		}
+		addr, err := cfg.InstanceAddr(decl)
+		if err != nil {
+			return err // "<type> "<name>" has no port — add `port = NNNN`"
+		}
+		if other, dup := addrs[addr]; dup {
+			return fmt.Errorf("port conflict: %q and %q both use %s — give each instance a unique port", other, decl.Name, addr)
+		}
+		addrs[addr] = decl.Name
+	}
+	return nil
 }
 
 // configDirOf returns the directory that holds the config (and its sibling
@@ -588,11 +619,17 @@ func (cfg *Config) buildPending(parser *hclparse.Parser, block *hcl.Block, restB
 		}
 		c.Version = "builtin"
 	}
+	if c.Port != 0 && (c.Port < 1 || c.Port > 65535) {
+		return nil, posErr(parser, block.DefRange,
+			fmt.Sprintf("%s %q: port %d is out of range", block.Type, name, c.Port),
+			"a port must be between 1 and 65535")
+	}
 	inst := &InstanceDecl{
 		Type:    block.Type,
 		Name:    name,
 		Version: engine.VersionSpec(c.Version),
 		Listen:  c.Listen,
+		Port:    c.Port,
 		Index:   len(cfg.Instances),
 	}
 	// Resolve relative paths (e.g. extension bundles) against the file that
@@ -626,31 +663,17 @@ func (c *Config) Lookup(name string) *InstanceDecl { return c.index[name] }
 // the single source of truth for endpoint assignment (endpoints and the reference
 // evaluator both call it).
 func (c *Config) InstanceAddr(decl *InstanceDecl) (string, error) {
+	// A full `listen = "host:port"` override wins (e.g. binding 0.0.0.0 or a socket).
 	if decl.Listen != "" {
 		return decl.Listen, nil
 	}
-	// A supervised process binds its own port; advertise that address instead of a
-	// doze proxy slot (the daemon opens no listener for it). The proxy-port index it
-	// would otherwise occupy is simply left unbound.
-	if drv, ok := engine.Lookup(decl.Type); ok {
-		if pb, ok := drv.(engine.PortBinder); ok {
-			if addr, ok := pb.AdvertisedAddr(engine.Instance{Name: decl.Name, Type: decl.Type, Spec: decl.Spec}); ok {
-				return addr, nil
-			}
-		}
+	// Otherwise the instance must declare its client-facing port. doze does not
+	// auto-assign ports — be explicit, like you would for any real service.
+	if decl.Port != 0 {
+		return net.JoinHostPort("127.0.0.1", strconv.Itoa(decl.Port)), nil
 	}
-	if path, ok := strings.CutPrefix(c.Listen, "unix:"); ok {
-		return "unix:" + filepath.Join(filepath.Dir(path), decl.Name+".sock"), nil
-	}
-	host, portStr, err := net.SplitHostPort(c.Listen)
-	if err != nil {
-		return "", fmt.Errorf("invalid listen address %q: %w", c.Listen, err)
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return "", fmt.Errorf("invalid listen port %q: %w", portStr, err)
-	}
-	return net.JoinHostPort(host, strconv.Itoa(port+decl.Index)), nil
+	return "", fmt.Errorf("%s %q has no port — add `port = NNNN` to the block "+
+		"(e.g. port = 5432); doze does not auto-assign ports", decl.Type, decl.Name)
 }
 
 // Add registers an additional instance at runtime. It is used to inject

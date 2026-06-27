@@ -2,25 +2,22 @@ package process
 
 import (
 	"fmt"
+	"net"
 
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/doze-dev/doze-sdk/engine"
 )
 
-// Attributes implements engine.Attributer: expose the app's own listen address so
-// other instances can reference process.<name>.{url,host,port}. These override the
-// generic baseline (which would otherwise hold a doze proxy address this process
-// does not use).
-func (Driver) Attributes(inst engine.Instance, _ engine.Endpoint) map[string]cty.Value {
-	cfg, ok := inst.Spec.(*Config)
-	if !ok || cfg.Port == 0 {
+// Attributes implements engine.Attributer: expose the app's listen address as an
+// http URL so other instances can reference process.<name>.url. host/port come
+// from the generic baseline (derived from the declared port); this adds the URL.
+func (Driver) Attributes(_ engine.Instance, ep engine.Endpoint) map[string]cty.Value {
+	host, port, err := net.SplitHostPort(ep.TCPAddr)
+	if err != nil {
 		return nil
 	}
-	host := "127.0.0.1"
 	return map[string]cty.Value{
-		"host": cty.StringVal(host),
-		"port": cty.NumberIntVal(int64(cfg.Port)),
-		"url":  cty.StringVal(fmt.Sprintf("http://%s:%d", host, cfg.Port)),
+		"url": cty.StringVal(fmt.Sprintf("http://%s:%s", host, port)),
 	}
 }
