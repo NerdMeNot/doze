@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -66,6 +67,19 @@ func renderTree(cfg *config.Config, views map[string]control.InstanceView, daemo
 	for i, r := range roots {
 		printTreeNode(cfg, views, depsOf, r, "", i == len(roots)-1, true)
 	}
+
+	// Footprint footer: how many are awake and the resident memory they hold.
+	if daemonUp {
+		awake, ram := 0, int64(0)
+		for _, v := range views {
+			if awakeState(v.State) {
+				awake++
+				ram += v.RAM
+			}
+		}
+		fmt.Println()
+		fmt.Println(ui.Muted(fmt.Sprintf("%d awake · %dM resident", awake, ram/(1024*1024))))
+	}
 }
 
 func printTreeNode(cfg *config.Config, views map[string]control.InstanceView, depsOf map[string][]string, name, prefix string, last, root bool) {
@@ -117,18 +131,47 @@ func nodeLabel(cfg *config.Config, views map[string]control.InstanceView, name s
 
 	line := dot + " " + ui.Title(name)
 	if engineType != "" {
-		line += " " + ui.Muted(engineType)
+		eng := engineType
+		if ver := versionOf(decl, v, running); ver != "" {
+			eng += " " + ver
+		}
+		line += " " + ui.Muted(eng)
 	}
 	line += "  " + word
 	// Show the endpoint whenever the daemon knows it — even asleep, so you know
-	// where to connect (connecting wakes it). Conn count only when actually awake.
+	// where to connect (connecting wakes it).
 	if running && v.Endpoint != "" {
 		line += ui.Muted("  " + v.Endpoint)
-		if awakeState(v.State) && v.Conns > 0 {
-			line += ui.Muted(fmt.Sprintf("  (%d conn)", v.Conns))
+	}
+	// A compact resource tail when awake: connections · RAM · CPU.
+	if running && awakeState(v.State) {
+		var m []string
+		if v.Conns > 0 {
+			m = append(m, fmt.Sprintf("%dc", v.Conns))
+		}
+		if v.RAM > 0 {
+			m = append(m, fmt.Sprintf("%dM", v.RAM/(1024*1024)))
+		}
+		if v.CPU >= 0.5 {
+			m = append(m, fmt.Sprintf("%.0f%%", v.CPU))
+		}
+		if len(m) > 0 {
+			line += ui.Muted("  " + strings.Join(m, " · "))
 		}
 	}
 	return line
+}
+
+// versionOf returns the engine version for a node: the live value when running,
+// else the declared spec.
+func versionOf(decl *config.InstanceDecl, v control.InstanceView, running bool) string {
+	if running && v.Version != "" {
+		return v.Version
+	}
+	if decl != nil {
+		return decl.Version.String()
+	}
+	return ""
 }
 
 // awakeState reports whether a backend is alive (booting, serving, or idling
