@@ -88,6 +88,105 @@ func TestFilterToggleAndClear(t *testing.T) {
 	}
 }
 
+// sqsActs mirrors the sqs engine's published actions.
+func sqsActs() []control.ActionView {
+	return []control.ActionView{
+		{ID: "peek", Label: "Peek", Kind: "queue"},
+		{ID: "send", Label: "Send", Kind: "queue", InputHint: "message body"},
+		{ID: "purge", Label: "Purge", Kind: "queue", Destructive: true},
+		{ID: "redrive", Label: "Redrive", Kind: "queue"},
+	}
+}
+
+func TestViewerActionAndKeys(t *testing.T) {
+	m := model{adminActs: sqsActs()}
+	if v := m.viewerActionID(); v != "peek" {
+		t.Fatalf("viewer = %q, want peek (first non-destructive, no-input)", v)
+	}
+	km := m.adminActionKeys()
+	for id, want := range map[string]string{"send": "s", "purge": "p", "redrive": "r"} {
+		if km[id] != want {
+			t.Fatalf("key for %q = %q, want %q", id, km[id], want)
+		}
+	}
+	if _, ok := km["peek"]; ok {
+		t.Fatal("the viewer action should not get a letter key (it's enter)")
+	}
+	if a, ok := m.actionForKey("p"); !ok || a.ID != "purge" {
+		t.Fatalf("key p → %v/%v, want purge", a.ID, ok)
+	}
+}
+
+func TestInvokeActionStaging(t *testing.T) {
+	m := model{
+		cmd:         textinput.New(),
+		adminMode:   true,
+		adminActs:   sqsActs(),
+		adminRes:    []control.ResourceView{{Kind: "queue", Name: "emails"}},
+		adminCursor: 0,
+	}
+	get := func(id string) control.ActionView {
+		for _, a := range m.adminActs {
+			if a.ID == id {
+				return a
+			}
+		}
+		t.Fatalf("no action %q", id)
+		return control.ActionView{}
+	}
+	// Destructive → confirm prompt, not an immediate run.
+	nm, _ := m.invokeAction(get("purge"))
+	if mm := nm.(model); mm.adminConfirm != "purge" {
+		t.Fatalf("purge should stage a confirm, got %q", mm.adminConfirm)
+	}
+	// Input action → input prompt.
+	nm, _ = m.invokeAction(get("send"))
+	if mm := nm.(model); mm.adminInput != "send" {
+		t.Fatalf("send should open an input prompt, got %q", mm.adminInput)
+	}
+}
+
+func TestCharSelectionText(t *testing.T) {
+	m := model{copyCharMode: true, copyLines: []string{"hello world", "second line"}}
+	// single line: [0,0)→[0,5) = "hello"
+	m.copyAnchor, m.copyAnchorColCh = 0, 0
+	m.copyCursor, m.copyColCh = 0, 5
+	if got := m.selectedCharText(); got != "hello" {
+		t.Fatalf("single-line char select = %q, want hello", got)
+	}
+	// reversed drag (cursor before anchor) still orders correctly
+	m.copyAnchor, m.copyAnchorColCh = 0, 5
+	m.copyCursor, m.copyColCh = 0, 0
+	if got := m.selectedCharText(); got != "hello" {
+		t.Fatalf("reversed char select = %q, want hello", got)
+	}
+	// multi-line: from (0,6) to (1,6) = "world\nsecond"
+	m.copyAnchor, m.copyAnchorColCh = 0, 6
+	m.copyCursor, m.copyColCh = 1, 6
+	if got := m.selectedCharText(); got != "world\nsecond" {
+		t.Fatalf("multi-line char select = %q, want %q", got, "world\nsecond")
+	}
+}
+
+func TestWorkspaceRenders(t *testing.T) {
+	m := threeInstances()
+	m.cursor = 2 // media (s3)
+	m.adminMode = true
+	m.adminName = "media"
+	m.adminActs = []control.ActionView{
+		{ID: "browse", Label: "Browse", Kind: "bucket"},
+		{ID: "empty", Label: "Empty", Kind: "bucket", Destructive: true},
+	}
+	m.adminRes = []control.ResourceView{{Kind: "bucket", Name: "uploads", Status: "3 objects"}}
+	m.adminVP = viewport.New(40, 8)
+	out := m.View()
+	for _, want := range []string{"media", "uploads", "browse", "empty", "esc"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("workspace view missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestViewRendersInstancesAndKeys(t *testing.T) {
 	m := threeInstances()
 	out := m.View()
