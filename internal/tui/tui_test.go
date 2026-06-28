@@ -195,6 +195,32 @@ func TestInspectorNav(t *testing.T) {
 	}
 }
 
+func TestInspectorRailFocus(t *testing.T) {
+	m := inspectorModel()
+	m.railFocus = true // start on the left menu (as openConsole does)
+	m.refreshItemView()
+	// → drills into the item list (focus shifts to items).
+	m = send(m, key("right"))
+	if m.railFocus {
+		t.Fatal("→ should move focus to the item list")
+	}
+	// now ↓ moves the item cursor.
+	m = send(m, key("down"))
+	if m.inspCursor != 1 {
+		t.Fatalf("item down → inspCursor %d, want 1", m.inspCursor)
+	}
+	// ← returns focus to the menu.
+	m = send(m, key("left"))
+	if !m.railFocus {
+		t.Fatal("← should return focus to the menu")
+	}
+	// ↓ on the menu moves the resource selection, not the item cursor.
+	m = send(m, key("down"))
+	if m.adminCursor != 1 {
+		t.Fatalf("rail down → adminCursor %d, want 1", m.adminCursor)
+	}
+}
+
 func TestInspectorComposeKey(t *testing.T) {
 	m := inspectorModel()
 	m = send(m, key("n")) // new → the queue's send composer
