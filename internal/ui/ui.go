@@ -56,11 +56,15 @@ func paint(st lipgloss.Style, s string) string {
 }
 
 // Styling helpers (color-gated).
-func Title(s string) string { return paint(titleStyle, s) }
-func Muted(s string) string { return paint(dimStyle, s) }
-func OK(s string) string    { return paint(goodStyle, s) }
-func Fail(s string) string  { return paint(badStyle, s) }
-func Warn(s string) string  { return paint(warnStyle, s) }
+func Title(s string) string  { return paint(titleStyle, s) }
+func Muted(s string) string  { return paint(dimStyle, s) }
+func OK(s string) string     { return paint(goodStyle, s) }
+func Fail(s string) string   { return paint(badStyle, s) }
+func Warn(s string) string   { return paint(warnStyle, s) }
+func Header(s string) string { return paint(headerStyle, s) }
+
+// Width returns the visible (ANSI-stripped) width of s, for manual column layout.
+func Width(s string) int { return lipgloss.Width(s) }
 
 // State renders a lifecycle state in its color.
 func State(s string) string {
