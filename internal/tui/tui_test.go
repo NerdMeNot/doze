@@ -203,15 +203,55 @@ func TestInspectorComposeKey(t *testing.T) {
 	}
 }
 
+func TestComposerFIFOAware(t *testing.T) {
+	m := inspectorModel()
+	// cursor 0 = "emails" (standard) → the group field is dropped.
+	flds := m.composerFieldsFor("send")
+	for _, f := range flds {
+		if f.key == "group" {
+			t.Fatal("standard queue should not offer a group field")
+		}
+	}
+	// cursor 1 = "orders.fifo" → group is present, required-labelled, pre-filled.
+	m.adminCursor = 1
+	if !m.selectedIsFIFO() {
+		t.Fatal("orders.fifo should be detected as FIFO")
+	}
+	flds = m.composerFieldsFor("send")
+	var grp *composerField
+	for i := range flds {
+		if flds[i].key == "group" {
+			grp = &flds[i]
+		}
+	}
+	if grp == nil || grp.value != "default" || !strings.Contains(grp.label, "required") {
+		t.Fatalf("FIFO group field = %+v", grp)
+	}
+	// Opening the composer on a FIFO queue pre-fills the group so a send works
+	// out of the box (no MessageGroupId dead-end).
+	nm, _ := m.openComposer("send")
+	m = nm.(model)
+	got := ""
+	for _, f := range m.composerFlds {
+		if f.key == "group" {
+			got = f.value
+		}
+	}
+	if got != "default" {
+		t.Fatalf("FIFO composer group pre-fill = %q, want default", got)
+	}
+}
+
 func TestComposerSubmit(t *testing.T) {
 	m := inspectorModel()
 	nm, _ := m.openComposer("send")
 	m = nm.(model)
-	if len(m.composerFlds) != 3 {
-		t.Fatalf("send composer should have 3 fields, got %d", len(m.composerFlds))
+	// emails is a standard queue → body + attributes (no FIFO group field).
+	if len(m.composerFlds) != 2 {
+		t.Fatalf("standard send composer should have 2 fields, got %d", len(m.composerFlds))
 	}
 	m.composerFlds[0].value = "hello"
-	m.composerFlds[2].value = "tier=gold"
+	m.composerFlds[1].value = "tier=gold"
 	next, _ := m.composerSubmit()
 	m = next.(model)
 	if m.composerMode {

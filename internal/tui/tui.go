@@ -1513,11 +1513,49 @@ func parseAttrs(s string) map[string]string {
 
 func (m model) openComposer(verb string) (tea.Model, tea.Cmd) {
 	m.composerMode, m.composerVerb = true, verb
-	m.composerFlds = composerSchema(verb)
+	m.composerFlds = m.composerFieldsFor(verb)
 	m.composerAt = 0
-	m.cmd.SetValue("")
+	m.cmd.SetValue(m.composerFlds[0].value)
+	m.cmd.CursorEnd()
 	m.cmd.SetSuggestions(nil)
 	return m, m.cmd.Focus()
+}
+
+// composerFieldsFor adapts the schema to the selected resource. For a FIFO queue
+// the message group is required, so it is pre-filled (with a sensible default) and
+// labelled as such; for a standard queue the group field is dropped entirely
+// because SQS ignores it there.
+func (m model) composerFieldsFor(verb string) []composerField {
+	flds := composerSchema(verb)
+	if verb != "send" {
+		return flds
+	}
+	if m.selectedIsFIFO() {
+		for i := range flds {
+			if flds[i].key == "group" {
+				flds[i].label = "group (required for FIFO)"
+				flds[i].hint = "MessageGroupId — messages in a group stay ordered"
+				flds[i].value = "default"
+			}
+		}
+		return flds
+	}
+	out := flds[:0]
+	for _, f := range flds {
+		if f.key != "group" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// selectedIsFIFO reports whether the active queue is a FIFO queue.
+func (m model) selectedIsFIFO() bool {
+	r, ok := m.selectedResource()
+	if !ok {
+		return false
+	}
+	return r.Info["fifo"] == "true" || strings.HasSuffix(r.Name, ".fifo")
 }
 
 func (m *model) composerSave() {
@@ -1572,8 +1610,12 @@ func (m model) composerSubmit() (tea.Model, tea.Cmd) {
 		}
 	case "send":
 		payload["body"] = vals["body"]
-		if vals["group"] != "" {
-			payload["group"] = vals["group"]
+		grp := vals["group"]
+		if grp == "" && m.selectedIsFIFO() {
+			grp = "default" // FIFO requires a group — never let a send dead-end
+		}
+		if grp != "" {
+			payload["group"] = grp
 		}
 		if a := parseAttrs(vals["attributes"]); len(a) > 0 {
 			payload["attributes"] = a
