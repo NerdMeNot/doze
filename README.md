@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/logo.png" alt="doze" width="110" />
+
 # doze
 
 ### Real databases on your laptop — asleep until you need them.
