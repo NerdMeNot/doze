@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -186,7 +187,146 @@ type (
 		action, resource, result string
 		err                      error
 	}
+	itemsMsg struct {
+		name, resource, kind string
+		items                []inspItem
+		err                  error
+	}
 )
+
+// fetchItems loads the selected resource's contents as navigable items (the
+// engine returns JSON for the listMarker input).
+func fetchItems(c *control.Client, name, action, resource, kind string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := c.Do(control.Request{Op: "admin", DB: name, Action: action, Resource: resource, Input: listMarker})
+		if err != nil {
+			return itemsMsg{name: name, resource: resource, kind: kind, err: err}
+		}
+		items, perr := parseItems(kind, resp.Result)
+		return itemsMsg{name: name, resource: resource, kind: kind, items: items, err: perr}
+	}
+}
+
+// parseItems turns an engine's JSON item list into display rows for the kind.
+func parseItems(kind, jsonStr string) ([]inspItem, error) {
+	var raw []map[string]any
+	if strings.TrimSpace(jsonStr) == "" {
+		return nil, nil
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return nil, err
+	}
+	out := make([]inspItem, 0, len(raw))
+	for _, r := range raw {
+		switch kind {
+		case "queue":
+			body := jstr(r["body"])
+			var meta []string
+			if g := jstr(r["group"]); g != "" {
+				meta = append(meta, "group "+g)
+			}
+			if rc := jstr(r["received"]); rc != "" && rc != "1" {
+				meta = append(meta, "recv×"+rc)
+			}
+			detail := body
+			if a, ok := r["attrs"].(map[string]any); ok && len(a) > 0 {
+				detail += "\n\nattributes"
+				for _, k := range sortedAnyKeys(a) {
+					meta = append(meta, k+"="+jstr(a[k]))
+					detail += "\n  " + k + " = " + jstr(a[k])
+				}
+			}
+			out = append(out, inspItem{title: oneLine(body), meta: strings.Join(meta, "  ·  "), detail: detail, delArg: jstr(r["handle"])})
+		case "bucket":
+			key := jstr(r["key"])
+			out = append(out, inspItem{
+				title: key, meta: ui.HumanBytes(jint(r["size"])) + "  ·  " + jstr(r["modified"]),
+				detail: key, delArg: key,
+			})
+		case "topic":
+			title := jstr(r["protocol"]) + " → " + jstr(r["endpoint"])
+			filt := jstr(r["filter"])
+			meta := "filter: " + orNoneStr(filt)
+			if b, _ := r["raw"].(bool); b {
+				meta += "  ·  raw"
+			}
+			if c, _ := r["confirmed"].(bool); !c {
+				meta += "  ·  pending"
+			}
+			out = append(out, inspItem{title: title, meta: meta, detail: title + "\nfilter: " + orNoneStr(filt)})
+		}
+	}
+	return out, nil
+}
+
+func jstr(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func jint(v any) int64 {
+	if f, ok := v.(float64); ok {
+		return int64(f)
+	}
+	return 0
+}
+
+func sortedAnyKeys(m map[string]any) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+func oneLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i] + " ↵"
+	}
+	return s
+}
+
+func orNoneStr(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "none (all messages)"
+	}
+	return s
+}
+
+// cleanErr strips the gRPC envelope ("rpc error: code = … desc = ") from an admin
+// error so the inspector shows the engine's actual message.
+func cleanErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	if i := strings.LastIndex(s, "desc = "); i >= 0 {
+		s = s[i+len("desc = "):]
+	}
+	return s
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
 
 // builtinAdmin reports whether an engine exposes dash-manageable resources.
 func builtinAdmin(eng string) bool {
@@ -236,25 +376,23 @@ func runAdmin(c *control.Client, name, action, resource, input string) tea.Cmd {
 	}
 }
 
-// txBlock is one entry in the console transcript: a typed command echo, a result,
-// an info note, or an error. Text is stored unstyled and colored at render time.
-type txBlock struct {
-	kind int    // txEcho | txResult | txInfo | txErr
-	res  string // the resource the command targeted (echo lines only)
-	text string
-}
-
-const (
-	txEcho = iota
-	txResult
-	txInfo
-	txErr
-)
-
 // richPrefix marks an Admin input string as a structured (JSON) payload — for
 // multi-field actions (publish/send/put) composed via the form or parsed from
 // inline `k=v` syntax. Kept in sync with each engine's admin.richPrefix.
 const richPrefix = "\x01"
+
+// listMarker, as the Admin input, asks a read action for the JSON item list that
+// drives the inspector. Kept in sync with each engine's admin.listMarker.
+const listMarker = "\x01list"
+
+// inspItem is one row in the inspector's navigable list (a message, object, or
+// subscription), already rendered to display strings.
+type inspItem struct {
+	title  string // primary line (body preview / key / "proto → endpoint")
+	meta   string // dim secondary line (attrs / size·modified / filter)
+	detail string // full content for the expanded pane
+	delArg string // argument for the per-item delete action; "" = not deletable
+}
 
 // composerField is one labeled field of the multi-field composer.
 type composerField struct {
@@ -333,23 +471,27 @@ type model struct {
 	adminName    string // instance the workspace belongs to
 	adminRes     []control.ResourceView
 	adminActs    []control.ActionView
-	adminErr     string         // resource-fetch error (shown in the console header)
-	adminCursor  int            // active resource — the command target
-	adminLoaded  bool           // resources fetched at least once (vs still loading)
-	adminVP      viewport.Model // the transcript, scrollable
-	adminTx      []txBlock      // REPL transcript: command echoes + results
-	adminHist    []string       // command history (most recent last)
-	adminHistIdx int            // index into adminHist while recalling; len = fresh line
-	adminPending string         // a destructive verb awaiting y/n confirmation
+	adminErr     string // resource-fetch error (shown in the inspector header)
+	adminCursor  int    // active resource
+	adminLoaded  bool   // resources fetched at least once (vs still loading)
+	adminPending string // a destructive action ("purge"/"empty"/"del:<arg>") awaiting y/n
 
-	// composer: a multi-field form for rich actions (publish/send/put). The active
-	// field is edited in cmd; Tab cycles fields, Enter submits.
+	// inspector: the selected resource's live contents as a navigable item list
+	// (messages / objects / subscriptions), direct-manipulation rather than typed.
+	inspItems    []inspItem
+	inspCursor   int  // selected item
+	inspExpanded bool // detail pane open for the selected item
+	inspErr      string
+
+	// composer: a multi-field form for create actions (send/publish/put). The
+	// active field is edited in cmd; Tab cycles fields, Enter submits.
 	composerMode bool
 	composerVerb string
 	composerFlds []composerField
 	composerAt   int
 
-	cmd textinput.Model // the console prompt
+	cmd    textinput.Model // composer field editor
+	itemVP viewport.Model  // the inspector item list, scrollable
 
 	hist       map[string]*history
 	frame      int
@@ -382,7 +524,7 @@ func Run(socketPath string) error {
 		cmd:     ci,
 		hist:    map[string]*history{},
 		logVP:   viewport.New(0, 0),
-		adminVP: viewport.New(0, 0),
+		itemVP:  viewport.New(0, 0),
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	return err
@@ -496,14 +638,13 @@ func (m *model) layout() {
 	// logs box: rightW minus its rounded border (2) and horizontal padding (2×2).
 	m.logVP.Width = max(4, m.rightW()-6)
 	m.logVP.Height = max(3, m.bodyH()-detailH-6)
-	// admin inspector: the right column of the full-screen workspace.
-	// console transcript: the right column minus the rail, full height minus the
-	// header/rules/footer/prompt chrome.
-	m.adminVP.Width = max(10, m.width-m.adminLeftW()-5)
-	m.adminVP.Height = max(3, m.height-5)
+	// inspector item list: the right column minus the rail, the body height between
+	// the header/rule and the rule/footer.
+	m.itemVP.Width = max(10, m.width-m.adminLeftW()-5)
+	m.itemVP.Height = max(3, m.height-4)
 }
 
-// adminLeftW is the width of the workspace's resource list column.
+// adminLeftW is the width of the inspector's resource list column.
 func (m model) adminLeftW() int { return clampi(m.width/4, 22, 36) }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -515,8 +656,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		cmds := []tea.Cmd{refresh(m.client), tick()}
-		if m.adminMode && m.adminName != "" { // keep depths/counts live while managing
+		if m.adminMode && m.adminName != "" { // keep the inspector live while managing
 			cmds = append(cmds, fetchResources(m.client, m.adminName))
+			if c := m.loadItems(); c != nil {
+				cmds = append(cmds, c)
+			}
 		}
 		return m, tea.Batch(cmds...)
 
@@ -590,25 +734,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.adminErr, m.adminRes, m.adminActs = "", msg.res, msg.acts
 			}
 			if m.adminMode {
+				wasLoaded := m.adminLoaded
 				m.adminLoaded = true
 				if m.adminCursor >= len(m.adminRes) {
 					m.adminCursor = max(0, len(m.adminRes)-1)
 				}
-				m.refreshSuggestions() // resources changed → refresh `use` candidates
+				if !wasLoaded { // first load → fetch the selected resource's items
+					return m, m.loadItems()
+				}
 			}
 		}
 		return m, nil
 
-	case adminResultMsg:
-		// Every command's result lands in the transcript; a mutation also refreshes
-		// the resource list (depths/counts) underneath.
-		if msg.err != nil {
-			m.txPush(txBlock{kind: txErr, text: msg.err.Error()})
-		} else {
-			m.txPush(txBlock{kind: txResult, text: strings.TrimRight(msg.result, "\n")})
+	case itemsMsg:
+		// Adopt items only if they're for the resource we're still on.
+		if r, ok := m.selectedResource(); ok && m.adminMode && msg.name == m.adminName && msg.resource == r.Name {
+			if msg.err != nil {
+				m.inspErr = cleanErr(msg.err)
+			} else {
+				m.inspErr = ""
+				m.inspItems = msg.items
+				if m.inspCursor >= len(m.inspItems) {
+					m.inspCursor = max(0, len(m.inspItems)-1)
+				}
+			}
+			m.refreshItemView()
 		}
-		if m.adminName != "" {
-			return m, fetchResources(m.client, m.adminName)
+		return m, nil
+
+	case adminResultMsg:
+		// An item action (send/publish/put/del/purge/…): flash the outcome and
+		// reload the live list + resource counts.
+		if msg.err != nil {
+			m.setFlash(stErr.Render("✗ " + cleanErr(msg.err)))
+		} else if head := firstLine(msg.result); head != "" {
+			m.setFlash(stGreen.Render("✓ " + head))
+		}
+		if m.adminMode && m.adminName != "" {
+			return m, tea.Batch(m.loadItems(), fetchResources(m.client, m.adminName))
 		}
 		return m, nil
 
@@ -629,7 +792,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // in the sidebar selects that instance.
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	const headerRows = 2 // title + rule above the body
-	if m.copyMode {      // scroll the frozen logs; drag to extend the selection
+	if m.adminMode {     // the inspector owns the mouse so clicks never leak to the dash
+		if m.composerMode {
+			return m, nil
+		}
+		overRail := msg.X < m.adminLeftW()
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.inspCursor > 0 {
+				m.inspCursor--
+				m.refreshItemView()
+			}
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			if m.inspCursor < len(m.inspItems)-1 {
+				m.inspCursor++
+				m.refreshItemView()
+			}
+			return m, nil
+		case tea.MouseButtonLeft:
+			if msg.Action != tea.MouseActionPress {
+				return m, nil
+			}
+			if overRail {
+				// Rail rows: header(0) blank(1) then 2 rows per resource → screen row
+				// 2(chrome)+2+2*i. Map a click back to the resource index.
+				if i := (msg.Y - headerRows - 2) / 2; i >= 0 {
+					if m.selectResourceByIndex(i) {
+						return m, m.loadItems()
+					}
+				}
+				return m, nil
+			}
+			// Right column: ~2 rows per item from the list top, offset by scroll.
+			row := msg.Y - headerRows + m.itemVP.YOffset
+			if idx := row / 2; idx >= 0 && idx < len(m.inspItems) {
+				if idx == m.inspCursor {
+					m.inspExpanded = !m.inspExpanded
+				} else {
+					m.inspCursor, m.inspExpanded = idx, false
+				}
+				m.refreshItemView()
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+	if m.copyMode { // scroll the frozen logs; drag to extend the selection
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
 			m.logVP.LineUp(2)
@@ -1000,169 +1209,199 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // openConsole drops into the resource console for a running builtin: a REPL scoped
 // to the instance's sub-resources. Seeds the transcript with a greeting and focuses
 // the prompt.
+// openConsole enters the inspector for a running builtin: it fetches the
+// resources and the first one's contents, which render as a live, navigable list.
 func (m model) openConsole(v control.InstanceView) (tea.Model, tea.Cmd) {
 	m.adminMode, m.adminErr, m.adminLoaded = true, "", false
 	m.adminCursor, m.adminPending = 0, ""
-	m.adminHist, m.adminHistIdx = nil, 0
-	m.adminTx = []txBlock{{kind: txInfo, text: "connected to " + v.Name + " · " + v.Engine + " — type a command (try `peek`), or `help`"}}
-	m.adminVP.SetContent(m.renderTranscript(m.adminVP.Width))
-	m.adminVP.GotoBottom()
-	m.cmd.SetValue("")
-	m.cmd.Placeholder = ""
-	m.refreshSuggestions()
-	return m, tea.Batch(fetchResources(m.client, v.Name), m.cmd.Focus())
+	m.inspItems, m.inspCursor, m.inspExpanded, m.inspErr = nil, 0, false, ""
+	m.itemVP.SetContent(stFaint.Render("loading…"))
+	m.itemVP.GotoTop()
+	return m, fetchResources(m.client, v.Name)
 }
 
-// txPush appends a transcript block (bounded) and snaps the view to the bottom.
-func (m *model) txPush(b txBlock) {
-	m.adminTx = append(m.adminTx, b)
-	if len(m.adminTx) > 400 {
-		m.adminTx = m.adminTx[len(m.adminTx)-400:]
-	}
-	m.adminVP.SetContent(m.renderTranscript(m.adminVP.Width))
-	m.adminVP.GotoBottom()
-}
-
-// handleAdminKey drives the resource console — a prompt-first REPL. Most keys edit
-// the command line; a few navigate (Tab switches resource / completes, ↑↓ recall
-// history, PgUp/Dn scroll, Enter runs, Esc exits). A pending destructive confirm
-// intercepts y/n first.
+// handleAdminKey drives the inspector — a direct-manipulation browser. ↑↓ move
+// between items, Enter expands the selected one, n composes a new item, d deletes
+// it, the destructive bulk ops confirm, Tab switches resource, Esc backs out.
 func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.composerMode { // multi-field form for publish/send/put
+	if m.composerMode { // multi-field create form
 		return m.handleComposerKey(msg)
 	}
-	if m.adminPending != "" { // destructive confirm
+	if m.adminPending != "" { // confirm a delete / purge / empty
 		switch msg.String() {
 		case "y", "Y", "enter":
-			verb := m.adminPending
+			act, arg := m.adminPending, ""
+			if i := strings.IndexByte(act, ':'); i >= 0 {
+				act, arg = act[:i], act[i+1:]
+			}
 			m.adminPending = ""
 			if r, ok := m.selectedResource(); ok {
-				return m, runAdmin(m.client, m.adminName, verb, r.Name, "")
+				return m, runAdmin(m.client, m.adminName, act, r.Name, arg)
 			}
 			return m, nil
 		default:
 			m.adminPending = ""
-			m.txPush(txBlock{kind: txInfo, text: "cancelled"})
+			m.setFlash(stDim.Render("cancelled"))
 			return m, nil
 		}
 	}
 
-	// Tab on an empty prompt switches resource; otherwise it falls through to the
-	// textinput, which accepts the inline ghost suggestion.
-	if msg.String() == "tab" && strings.TrimSpace(m.cmd.Value()) == "" {
-		m.cycleResource(1)
-		return m, nil
-	}
-
+	kind := m.resKind()
 	switch msg.String() {
-	case "esc":
+	case "esc", "q":
+		if m.inspExpanded {
+			m.inspExpanded = false
+			m.refreshItemView()
+			return m, nil
+		}
 		m.adminMode = false
-		m.cmd.Blur()
 		return m, nil
-	case "shift+tab":
-		m.cycleResource(-1)
+	case "up", "k":
+		if m.inspCursor > 0 {
+			m.inspCursor--
+		}
+		m.refreshItemView()
 		return m, nil
-	case "up":
-		m.recallHistory(-1)
+	case "down", "j":
+		if m.inspCursor < len(m.inspItems)-1 {
+			m.inspCursor++
+		}
+		m.refreshItemView()
 		return m, nil
-	case "down":
-		m.recallHistory(1)
+	case "g", "home":
+		m.inspCursor, m.inspExpanded = 0, false
+		m.refreshItemView()
+		return m, nil
+	case "G", "end":
+		m.inspCursor, m.inspExpanded = max(0, len(m.inspItems)-1), false
+		m.refreshItemView()
 		return m, nil
 	case "pgup", "ctrl+u":
-		m.adminVP.HalfViewUp()
+		m.itemVP.HalfViewUp()
 		return m, nil
 	case "pgdown", "ctrl+d":
-		m.adminVP.HalfViewDown()
+		m.itemVP.HalfViewDown()
 		return m, nil
-	case "ctrl+l":
-		m.adminTx = nil
-		m.adminVP.SetContent("")
+	case "enter", " ":
+		m.inspExpanded = !m.inspExpanded
+		m.refreshItemView()
 		return m, nil
-	case "enter":
-		return m.runConsoleCommand()
+	case "tab":
+		m.cycleResource(1)
+		return m, m.loadItems()
+	case "shift+tab":
+		m.cycleResource(-1)
+		return m, m.loadItems()
+	case "r":
+		return m, m.loadItems()
+	case "n": // compose a new item (send/publish/put)
+		if v := composeVerb(kind); v != "" {
+			return m.openComposer(v)
+		}
+		return m, nil
+	case "d", "x": // delete the selected item
+		if it, ok := m.selectedItem(); ok && it.delArg != "" {
+			if da := deleteAction(kind); da != "" {
+				m.adminPending = da + ":" + it.delArg
+				m.setFlash(stErr.Render("delete this " + itemNoun(kind) + "? — y to confirm"))
+			}
+		}
+		return m, nil
+	case "P": // purge (queue) / empty (bucket)
+		switch kind {
+		case "queue":
+			m.adminPending = "purge"
+			m.setFlash(stErr.Render("purge every message? — y to confirm"))
+		case "bucket":
+			m.adminPending = "empty"
+			m.setFlash(stErr.Render("empty the bucket? — y to confirm"))
+		}
+		return m, nil
+	case "R": // redrive (queue dead-letter → source)
+		if kind == "queue" {
+			if r, ok := m.selectedResource(); ok {
+				return m, runAdmin(m.client, m.adminName, "redrive", r.Name, "")
+			}
+		}
+		return m, nil
 	}
-	var cmd tea.Cmd
-	m.cmd, cmd = m.cmd.Update(msg)
-	m.refreshSuggestions() // keep the ghost candidates in sync with the new text
-	return m, cmd
+	return m, nil
 }
 
-// runConsoleCommand parses the prompt as "<verb> [args]" against the active
-// resource and dispatches it: a built-in console verb (help/use/ls/clear), an
-// engine action (peek/send/purge/…), or an error. Destructive verbs stage a
-// y/n confirm. The implicit target is the active resource, so you type `peek 5`,
-// not `peek emails 5`.
-func (m model) runConsoleCommand() (tea.Model, tea.Cmd) {
-	raw := strings.TrimSpace(m.cmd.Value())
-	m.cmd.SetValue("")
-	if raw == "" {
-		return m, nil
+// refreshItemView re-renders the item list into the viewport with the cursor row
+// emphasized and (when expanded) the selected item's detail inline, keeping the
+// cursor on screen.
+func (m *model) refreshItemView() {
+	w := m.itemVP.Width
+	if w < 4 {
+		w = 4
 	}
-	m.adminHist = append(m.adminHist, raw)
-	m.adminHistIdx = len(m.adminHist)
-
-	r, hasRes := m.selectedResource()
-	resName := ""
-	if hasRes {
-		resName = r.Name
+	switch {
+	case m.inspErr != "":
+		m.itemVP.SetContent(stErr.Render("✕ " + truncate(m.inspErr, w)))
+		return
+	case !m.adminLoaded:
+		m.itemVP.SetContent(stFaint.Render("loading…"))
+		return
+	case len(m.inspItems) == 0:
+		m.itemVP.SetContent(stFaint.Render(emptyMsg(m.resKind())))
+		return
 	}
-	m.txPush(txBlock{kind: txEcho, res: resName, text: raw})
-
-	fields := strings.Fields(raw)
-	verb := strings.ToLower(fields[0])
-	args := strings.TrimSpace(raw[len(fields[0]):])
-
-	switch verb {
-	case "help", "?":
-		m.txPush(txBlock{kind: txResult, text: m.consoleHelp()})
-		return m, nil
-	case "clear", "cls":
-		m.adminTx = nil
-		m.adminVP.SetContent("")
-		return m, nil
-	case "ls", "resources", "queues", "buckets", "topics":
-		m.txPush(txBlock{kind: txResult, text: m.resourceListText()})
-		return m, nil
-	case "use", "cd":
-		if m.selectResourceByName(args) {
-			m.txPush(txBlock{kind: txInfo, text: "→ " + args})
+	var b strings.Builder
+	cursorTop, line := 0, 0
+	for i, it := range m.inspItems {
+		sel := i == m.inspCursor
+		if sel {
+			cursorTop = line
+			b.WriteString(stAccent.Render("▸ ") + stAccent.Bold(true).Render(truncate(it.title, w-2)) + "\n")
 		} else {
-			m.txPush(txBlock{kind: txErr, text: "no such resource: " + args})
+			b.WriteString("  " + stText.Render(truncate(it.title, w-2)) + "\n")
 		}
-		return m, nil
-	case "exit", "quit":
-		m.adminMode = false
-		m.cmd.Blur()
-		return m, nil
+		line++
+		if it.meta != "" {
+			b.WriteString("    " + stFaint.Render(truncate(it.meta, w-4)) + "\n")
+			line++
+		}
+		if sel && m.inspExpanded && it.detail != "" {
+			b.WriteString("    " + stFaint.Render(strings.Repeat("┄", max(1, w-6))) + "\n")
+			line++
+			for _, ln := range strings.Split(it.detail, "\n") {
+				b.WriteString("    " + stDim.Render(truncate(ln, w-4)) + "\n")
+				line++
+			}
+		}
 	}
+	m.itemVP.SetContent(strings.TrimRight(b.String(), "\n"))
+	off, h := m.itemVP.YOffset, m.itemVP.Height
+	if cursorTop < off {
+		m.itemVP.SetYOffset(cursorTop)
+	} else if cursorTop >= off+h {
+		m.itemVP.SetYOffset(cursorTop - h + 1)
+	}
+}
 
-	act, found := m.actionByID(verb)
-	if !found {
-		m.txPush(txBlock{kind: txErr, text: "unknown command — try: " + strings.Join(m.verbList(), " ")})
-		return m, nil
+func emptyMsg(kind string) string {
+	switch kind {
+	case "queue":
+		return "no messages — the queue is empty (press n to send one)"
+	case "bucket":
+		return "no objects — the bucket is empty (press n to upload one)"
+	case "topic":
+		return "no subscriptions — nothing receives this topic"
 	}
-	if !hasRes {
-		m.txPush(txBlock{kind: txErr, text: "no resource here to act on"})
-		return m, nil
+	return "(empty)"
+}
+
+func itemNoun(kind string) string {
+	switch kind {
+	case "queue":
+		return "message"
+	case "bucket":
+		return "object"
+	case "topic":
+		return "subscription"
 	}
-	// Rich verbs (publish/send/put): no args opens the guided composer; inline
-	// args are parsed into a structured payload (`publish "hi" tier=gold`).
-	if richVerbs[verb] {
-		if args == "" {
-			return m.openComposer(verb)
-		}
-		return m, runAdmin(m.client, m.adminName, verb, resName, richPrefix+inlinePayload(verb, args))
-	}
-	if act.InputHint != "" && args == "" {
-		m.txPush(txBlock{kind: txErr, text: "usage: " + verb + " <" + act.InputHint + ">"})
-		return m, nil
-	}
-	if act.Destructive {
-		m.adminPending = verb
-		m.txPush(txBlock{kind: txInfo, text: "⚠ " + verb + " " + resName + "? — y to confirm, any key to cancel"})
-		return m, nil
-	}
-	return m, runAdmin(m.client, m.adminName, verb, resName, args)
+	return "item"
 }
 
 // inlinePayload turns inline `<body> k=v k2=v2` args into the JSON payload an
@@ -1241,8 +1480,7 @@ func (m model) handleComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.composerMode = false
 		m.cmd.SetValue("")
-		m.refreshSuggestions()
-		m.txPush(txBlock{kind: txInfo, text: "cancelled"})
+		m.setFlash(stDim.Render("cancelled"))
 		return m, nil
 	case "tab", "down":
 		m.composerSave()
@@ -1296,226 +1534,107 @@ func (m model) composerSubmit() (tea.Model, tea.Cmd) {
 	verb := m.composerVerb
 	m.composerMode = false
 	m.cmd.SetValue("")
-	m.refreshSuggestions()
 	r, ok := m.selectedResource()
 	if !ok {
 		return m, nil
 	}
-	m.txPush(txBlock{kind: txEcho, res: r.Name, text: verb + composerEcho(verb, vals)})
 	return m, runAdmin(m.client, m.adminName, verb, r.Name, richPrefix+mustJSON(payload))
 }
 
-// composerEcho is a compact human echo of what was composed.
-func composerEcho(verb string, vals map[string]string) string {
-	primary := vals["message"]
-	if verb != "publish" {
-		primary = vals["body"]
-	}
-	if verb == "put" {
-		primary = vals["key"]
-	}
-	out := ""
-	if primary != "" {
-		out = " " + truncate(primary, 40)
-	}
-	if a := vals["attributes"]; a != "" {
-		out += "  " + a
-	}
-	return out
-}
-
-// ── console helpers ─────────────────────────────────────────────────────────
-
-func (m model) actionByID(id string) (control.ActionView, bool) {
-	for _, a := range m.adminActs {
-		if a.ID == id {
-			return a, true
-		}
-	}
-	return control.ActionView{}, false
-}
-
-// verbList is the full command vocabulary (engine actions + built-ins) for hints
-// and completion.
-func (m model) verbList() []string {
-	out := make([]string, 0, len(m.adminActs)+3)
-	for _, a := range m.adminActs {
-		out = append(out, a.ID)
-	}
-	out = append(out, "use", "ls", "help")
-	return out
-}
-
-// consoleHelp documents the engine's verbs with their grammar.
-func (m model) consoleHelp() string {
-	var b strings.Builder
-	for _, a := range m.adminActs {
-		line := a.ID
-		if a.InputHint != "" {
-			line += " <" + a.InputHint + ">"
-		} else if a.ID == "peek" || a.ID == "browse" {
-			line += " [n]"
-		}
-		for len(line) < 18 {
-			line += " "
-		}
-		line += a.Label
-		if a.Destructive {
-			line += " (confirms)"
-		}
-		b.WriteString(line + "\n")
-	}
-	b.WriteString("use <name>        switch the active resource (or Tab)\n")
-	b.WriteString("ls                list resources    clear   wipe scrollback\n")
-	b.WriteString("esc               exit the console")
-	return b.String()
-}
-
-func (m model) resourceListText() string {
-	if len(m.adminRes) == 0 {
-		return "(no resources)"
-	}
-	var b strings.Builder
-	for i, r := range m.adminRes {
-		mark := "  "
-		if i == m.adminCursor {
-			mark = "▸ "
-		}
-		b.WriteString(mark + r.Name)
-		if r.Status != "" {
-			b.WriteString("   " + r.Status)
-		}
-		b.WriteByte('\n')
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m *model) selectResourceByName(name string) bool {
-	for i, r := range m.adminRes {
-		if r.Name == name {
-			m.adminCursor = i
-			return true
-		}
-	}
-	return false
-}
-
+// cycleResource moves the active resource and resets the item cursor.
 func (m *model) cycleResource(dir int) {
 	if len(m.adminRes) == 0 {
 		return
 	}
 	m.adminCursor = (m.adminCursor + dir + len(m.adminRes)) % len(m.adminRes)
-	m.txPush(txBlock{kind: txInfo, text: "→ " + m.adminRes[m.adminCursor].Name})
+	m.inspCursor, m.inspExpanded, m.inspItems = 0, false, nil
+	m.itemVP.SetContent(stFaint.Render("loading…"))
+	m.itemVP.GotoTop()
 }
 
-// recallHistory walks the command history into the prompt (dir -1 = older).
-func (m *model) recallHistory(dir int) {
-	if len(m.adminHist) == 0 {
-		return
+// selectResourceByIndex sets the active resource (mouse rail click).
+func (m *model) selectResourceByIndex(i int) bool {
+	if i < 0 || i >= len(m.adminRes) || i == m.adminCursor {
+		return false
 	}
-	m.adminHistIdx += dir
-	if m.adminHistIdx < 0 {
-		m.adminHistIdx = 0
-	}
-	if m.adminHistIdx >= len(m.adminHist) {
-		m.adminHistIdx = len(m.adminHist)
-		m.cmd.SetValue("")
-		m.cmd.CursorEnd()
-		return
-	}
-	m.cmd.SetValue(m.adminHist[m.adminHistIdx])
-	m.cmd.CursorEnd()
+	m.adminCursor = i
+	m.inspCursor, m.inspExpanded, m.inspItems = 0, false, nil
+	m.itemVP.SetContent(stFaint.Render("loading…"))
+	m.itemVP.GotoTop()
+	return true
 }
 
-// refreshSuggestions updates the prompt's inline ghost-completion candidates to
-// match the cursor context: verbs while typing the command, full "use <resource>"
-// strings after a `use`. The textinput matches them as whole-value prefixes and
-// renders the remainder as faint ghost text (Tab/→ accepts).
-func (m *model) refreshSuggestions() {
-	val := m.cmd.Value()
-	fields := strings.Fields(val)
-	endsSpace := strings.HasSuffix(val, " ")
-	var sug []string
-	switch {
-	case len(fields) == 0 || (len(fields) == 1 && !endsSpace):
-		sug = m.verbList()
-	case fields[0] == "use" || fields[0] == "cd":
-		for _, r := range m.adminRes {
-			sug = append(sug, fields[0]+" "+r.Name)
-		}
-	}
-	m.cmd.SetSuggestions(sug)
-}
-
-// argHint is the faint placeholder shown after a complete verb, describing the
-// argument it expects (e.g. "peek " → "[count]", "send " → "<message body>").
-func (m model) argHint() string {
-	val := m.cmd.Value()
-	fields := strings.Fields(val)
-	if len(fields) == 0 || (len(fields) == 1 && !strings.HasSuffix(val, " ")) {
-		return "" // still typing the verb (the ghost handles that)
-	}
-	if len(fields) >= 2 {
-		return "" // an argument is already being typed
-	}
-	verb := fields[0]
-	if a, ok := m.actionByID(verb); ok {
-		if a.InputHint != "" {
-			return "<" + a.InputHint + ">"
-		}
-		if verb == "peek" || verb == "browse" {
-			return "[count]"
-		}
-	}
-	if verb == "use" || verb == "cd" {
-		return "<resource>"
-	}
-	return ""
-}
-
-// renderTranscript lays the REPL scrollback out for the viewport: command echoes
-// with an accent caret, results plain, info faint, errors red, a blank line before
-// each new command.
-func (m model) renderTranscript(w int) string {
-	if w < 4 {
-		w = 4
-	}
-	var b strings.Builder
-	for i, t := range m.adminTx {
-		if t.kind == txEcho && i > 0 {
-			b.WriteByte('\n')
-		}
-		switch t.kind {
-		case txEcho:
-			line := ""
-			if t.res != "" {
-				line += stFaint.Render(t.res + " ")
-			}
-			b.WriteString(line + stAccent.Render("❯ ") + stText.Render(truncate(t.text, max(1, w-4))) + "\n")
-		case txResult:
-			body := strings.TrimRight(t.text, "\n")
-			if body == "" {
-				b.WriteString(stFaint.Render("(empty)") + "\n")
-				break
-			}
-			for _, ln := range strings.Split(body, "\n") {
-				b.WriteString(stText.Render(truncate(ln, w)) + "\n")
-			}
-		case txInfo:
-			b.WriteString(stFaint.Render(truncate(t.text, w)) + "\n")
-		case txErr:
-			b.WriteString(stErr.Render(truncate("✕ "+t.text, w)) + "\n")
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// selectedResource is the resource the workspace cursor is on.
+// selectedResource is the resource the inspector cursor is on.
 func (m model) selectedResource() (control.ResourceView, bool) {
 	if m.adminCursor < 0 || m.adminCursor >= len(m.adminRes) {
 		return control.ResourceView{}, false
 	}
 	return m.adminRes[m.adminCursor], true
+}
+
+func (m model) selectedItem() (inspItem, bool) {
+	if m.inspCursor < 0 || m.inspCursor >= len(m.inspItems) {
+		return inspItem{}, false
+	}
+	return m.inspItems[m.inspCursor], true
+}
+
+// kind of the active resource ("queue"/"bucket"/"topic").
+func (m model) resKind() string {
+	if r, ok := m.selectedResource(); ok {
+		return r.Kind
+	}
+	return ""
+}
+
+// readAction is the engine action that lists a kind's contents for the inspector.
+func readAction(kind string) string {
+	switch kind {
+	case "queue":
+		return "peek"
+	case "bucket":
+		return "browse"
+	case "topic":
+		return "subs"
+	}
+	return ""
+}
+
+// composeVerb is the create action for a kind (opens the composer).
+func composeVerb(kind string) string {
+	switch kind {
+	case "queue":
+		return "send"
+	case "bucket":
+		return "put"
+	case "topic":
+		return "publish"
+	}
+	return ""
+}
+
+// deleteAction is the per-item delete action for a kind ("" = not deletable here).
+func deleteAction(kind string) string {
+	switch kind {
+	case "queue":
+		return "del"
+	case "bucket":
+		return "rm"
+	}
+	return ""
+}
+
+// loadItems re-fetches the active resource's items into the inspector.
+func (m model) loadItems() tea.Cmd {
+	r, ok := m.selectedResource()
+	if !ok {
+		return nil
+	}
+	act := readAction(r.Kind)
+	if act == "" {
+		return nil
+	}
+	return fetchItems(m.client, m.adminName, act, r.Name, r.Kind)
 }
 
 // sortedInfoKeys returns a resource's Info keys in stable order.
@@ -1790,9 +1909,9 @@ func (m *model) refreshCopyView() {
 func (m *model) onSelect() tea.Cmd {
 	m.logVP.SetContent("")
 	m.logErr = ""
-	// Moving off the previous instance invalidates its cached resources/console.
+	// Moving off the previous instance invalidates its cached resources/items.
 	m.adminRes, m.adminActs, m.adminName, m.adminErr = nil, nil, "", ""
-	m.adminCursor = 0
+	m.adminCursor, m.inspItems, m.inspCursor, m.inspExpanded = 0, nil, 0, false
 	v, ok := m.selected()
 	if !ok || v.PID == 0 {
 		return nil
@@ -1877,9 +1996,9 @@ func (m model) viewConsole() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.consoleRail(railW, bodyH),
 		stFaint.Render(" │ "),
-		m.consoleRight(rightW, bodyH))
+		m.inspectorMain(rightW, bodyH))
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, rule, body, rule, m.consoleFooter())
+	return lipgloss.JoinVertical(lipgloss.Left, header, rule, body, rule, m.inspectorFooter())
 }
 
 // consoleRail is the resource list, the active one marked and bright.
@@ -1918,79 +2037,74 @@ func (m model) consoleRail(w, h int) string {
 	return lipgloss.NewStyle().Width(w).Render(strings.Join(rows, "\n"))
 }
 
-// consoleRight stacks the scrollable transcript above the live prompt.
-func (m model) consoleRight(w, h int) string {
-	transcript := lipgloss.NewStyle().Width(w).Height(h-1).MaxHeight(h-1).Render(m.adminVP.View())
-	return transcript + "\n" + m.consolePrompt(w)
-}
-
-// consolePrompt is the input line: the live command with a faint verb hint, or a
-// destructive confirmation.
-func (m model) consolePrompt(w int) string {
-	if m.composerMode && m.composerAt < len(m.composerFlds) {
-		f := m.composerFlds[m.composerAt]
-		left := stLabel.Render(f.label) + "  " + m.cmd.View()
-		hint := stFaint.Render(f.hint)
-		gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
-		if gap < 3 {
-			return left
-		}
-		return left + strings.Repeat(" ", gap) + hint
-	}
-	if m.adminPending != "" {
-		return stErr.Render("⚠ "+m.adminPending+"?  ") + stAccent.Render("y") + stFaint.Render(" confirm · any other key cancel")
-	}
-	left := m.cmd.View()
-	// The textinput renders the inline ghost when a suggestion matches; otherwise
-	// show the expected-argument placeholder right after the cursor.
-	if m.cmd.CurrentSuggestion() == "" {
-		if h := m.argHint(); h != "" {
-			left += stFaint.Render(" " + h)
-		}
-	}
-	hint := stFaint.Render(strings.Join(m.verbList(), "  "))
-	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
-	if gap < 3 {
-		return left
-	}
-	return left + strings.Repeat(" ", gap) + hint
-}
-
-// consoleFooter shows the active resource's live status and the navigation keys —
-// or, while composing, the form's field progress.
-func (m model) consoleFooter() string {
+// inspectorMain is the right column: the live item list, or — while composing — a
+// labeled create form.
+func (m model) inspectorMain(w, h int) string {
 	if m.composerMode {
-		left := stDim.Render("compose " + m.composerVerb)
-		for i, f := range m.composerFlds {
-			v := f.value
-			if i == m.composerAt {
-				v = m.cmd.Value()
-			}
-			mark := "·"
-			if strings.TrimSpace(v) != "" {
-				mark = "✓"
-			}
-			seg := f.label + " " + mark
-			if i == m.composerAt {
-				left += "  " + stAccent.Render(seg)
-			} else {
-				left += "  " + stFaint.Render(seg)
-			}
-		}
-		hints := stFaint.Render("⇥ next field · ↵ " + m.composerVerb + " · esc cancel")
-		gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(hints)-2)
-		return " " + left + strings.Repeat(" ", gap) + hints
+		return lipgloss.NewStyle().Width(w).Height(h).Render(m.composerForm(w, h))
 	}
-	left := ""
-	if r, ok := m.selectedResource(); ok {
-		left = stText.Render(r.Name)
-		if r.Status != "" {
-			left += stDim.Render("  "+r.Status)
+	return lipgloss.NewStyle().Width(w).Height(h).MaxHeight(h).Render(m.itemVP.View())
+}
+
+// composerForm renders the multi-field create form (the active field shows the
+// live editor; others show their entered value).
+func (m model) composerForm(w, h int) string {
+	r, _ := m.selectedResource()
+	lines := []string{stTitle.Render("new " + itemNoun(m.resKind())) + stDim.Render("  → "+r.Name), ""}
+	for i, f := range m.composerFlds {
+		label := "  " + f.label
+		if i == m.composerAt {
+			label = stAccent.Render("▸ ") + stAccent.Bold(true).Render(f.label)
+		} else {
+			label = stFaint.Render(label)
 		}
+		lines = append(lines, label)
+		if i == m.composerAt {
+			lines = append(lines, "    "+m.cmd.View())
+			if f.hint != "" {
+				lines = append(lines, "    "+stFaint.Render(f.hint))
+			}
+		} else if f.value != "" {
+			lines = append(lines, "    "+stText.Render(truncate(f.value, w-4)))
+		} else {
+			lines = append(lines, "    "+stFaint.Render("(empty)"))
+		}
+		lines = append(lines, "")
 	}
-	hints := stFaint.Render("↹ switch · ↑↓ history · pgup/pgdn scroll · esc exit")
-	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(hints)-2)
-	return " " + left + strings.Repeat(" ", gap) + hints
+	lines = append(lines, stFaint.Render("⇥ next field   ↵ "+m.composerVerb+"   esc cancel"))
+	return strings.Join(lines, "\n")
+}
+
+// inspectorFooter is the context action bar — the keys for the current kind plus
+// the item count, or a confirm prompt.
+func (m model) inspectorFooter() string {
+	if m.adminPending != "" {
+		act := m.adminPending
+		if i := strings.IndexByte(act, ':'); i >= 0 {
+			act = act[:i]
+		}
+		return " " + stErr.Render("⚠ "+act+" — ") + stAccent.Render("y") + stDim.Render(" confirm") + stFaint.Render("  ·  any other key cancels")
+	}
+	if m.composerMode {
+		return " " + stDim.Render("composing a new "+itemNoun(m.resKind())+" — fill the form, ↵ to "+m.composerVerb)
+	}
+	kind := m.resKind()
+	key := func(k, l string) string { return stAccent.Render(k) + stDim.Render(" "+l) }
+	sep := stFaint.Render("  ·  ")
+	parts := []string{key("↑↓", "move"), key("↵", "expand")}
+	switch kind {
+	case "queue":
+		parts = append(parts, key("n", "send"), key("d", "delete"), key("P", "purge"), key("R", "redrive"))
+	case "bucket":
+		parts = append(parts, key("n", "put"), key("d", "delete"), key("P", "empty"))
+	case "topic":
+		parts = append(parts, key("n", "publish"))
+	}
+	parts = append(parts, key("⇥", "switch"), key("r", "refresh"), key("esc", "exit"))
+	left := strings.Join(parts, sep)
+	right := stFaint.Render(fmt.Sprintf("%d %s", len(m.inspItems), itemNoun(kind)+"s"))
+	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-2)
+	return " " + left + strings.Repeat(" ", gap) + right
 }
 
 func (m model) View() string {

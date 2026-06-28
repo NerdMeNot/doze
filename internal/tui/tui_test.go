@@ -98,8 +98,9 @@ func sqsActs() []control.ActionView {
 	}
 }
 
-// consoleModel builds a console scoped to a sqs instance with one queue selected.
-func consoleModel() model {
+// inspectorModel builds an inspector scoped to a sqs instance, queue selected,
+// with two messages already loaded.
+func inspectorModel() model {
 	return model{
 		width: 110, height: 30,
 		cmd:         textinput.New(),
@@ -107,45 +108,82 @@ func consoleModel() model {
 		adminLoaded: true,
 		adminName:   "jobs_sqs",
 		adminActs:   sqsActs(),
-		adminRes:    []control.ResourceView{{Kind: "queue", Name: "emails", Status: "3 msgs"}, {Kind: "queue", Name: "dlq"}},
+		adminRes:    []control.ResourceView{{Kind: "queue", Name: "emails", Status: "2 msgs"}, {Kind: "queue", Name: "orders.fifo"}},
 		adminCursor: 0,
+		itemVP:      viewport.New(70, 20),
+		inspItems: []inspItem{
+			{title: "hello", meta: "group a", detail: "hello", delArg: "h1"},
+			{title: "world", detail: "world", delArg: "h2"},
+		},
 	}
 }
 
-func run(m model, line string) model {
-	m.cmd.SetValue(line)
-	next, _ := m.runConsoleCommand()
-	return next.(model)
+func TestParseItems(t *testing.T) {
+	// queue messages: body + group + receive count + attributes + delete handle.
+	items, err := parseItems("queue", `[{"body":"hi","group":"g1","received":"2","attrs":{"tier":"gold"},"handle":"rh"}]`)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("parse queue: err=%v n=%d", err, len(items))
+	}
+	if items[0].title != "hi" || items[0].delArg != "rh" ||
+		!strings.Contains(items[0].meta, "tier=gold") || !strings.Contains(items[0].meta, "group g1") {
+		t.Fatalf("queue item = %+v", items[0])
+	}
+	// bucket objects are deletable by key.
+	items, _ = parseItems("bucket", `[{"key":"a.txt","size":1024,"modified":"2026"}]`)
+	if len(items) != 1 || items[0].title != "a.txt" || items[0].delArg != "a.txt" {
+		t.Fatalf("bucket item = %+v", items[0])
+	}
+	// topic subscriptions show protocol + filter.
+	items, _ = parseItems("topic", `[{"protocol":"sqs","endpoint":"emails","filter":"eventType ∈ [created]","raw":true,"confirmed":true}]`)
+	if len(items) != 1 || !strings.Contains(items[0].title, "emails") || !strings.Contains(items[0].meta, "eventType") {
+		t.Fatalf("topic item = %+v", items[0])
+	}
 }
 
-func lastTx(m model) txBlock { return m.adminTx[len(m.adminTx)-1] }
-
-func TestConsoleCommandParsing(t *testing.T) {
-	// A destructive verb stages a y/n confirm rather than running immediately.
-	m := run(consoleModel(), "purge")
-	if m.adminPending != "purge" {
-		t.Fatalf("purge should stage a confirm, got pending=%q", m.adminPending)
+func TestInspectorNav(t *testing.T) {
+	m := inspectorModel()
+	m.refreshItemView()
+	m = send(m, key("down"))
+	if m.inspCursor != 1 {
+		t.Fatalf("down → cursor %d, want 1", m.inspCursor)
 	}
-	// A rich verb with no args opens the composer.
-	m = run(consoleModel(), "send")
+	m = send(m, key("enter"))
+	if !m.inspExpanded {
+		t.Fatal("enter should expand the selected item")
+	}
+	// d stages a delete confirm carrying the item's handle.
+	m = send(m, key("d"))
+	if m.adminPending != "del:h2" {
+		t.Fatalf("d should stage del:h2, got %q", m.adminPending)
+	}
+	// a non-confirm key cancels.
+	m = send(m, key("x"))
+	if m.adminPending != "" {
+		t.Fatalf("cancel should clear pending, got %q", m.adminPending)
+	}
+}
+
+func TestInspectorComposeKey(t *testing.T) {
+	m := inspectorModel()
+	m = send(m, key("n")) // new → the queue's send composer
 	if !m.composerMode || m.composerVerb != "send" {
-		t.Fatalf("send with no args should open the composer, got mode=%v verb=%q", m.composerMode, m.composerVerb)
+		t.Fatalf("n should open the send composer, got mode=%v verb=%q", m.composerMode, m.composerVerb)
 	}
-	// An unknown verb errors.
-	m = run(consoleModel(), "frobnicate")
-	if b := lastTx(m); b.kind != txErr {
-		t.Fatalf("unknown verb should error, got %+v", b)
+}
+
+func TestComposerSubmit(t *testing.T) {
+	m := inspectorModel()
+	nm, _ := m.openComposer("send")
+	m = nm.(model)
+	if len(m.composerFlds) != 3 {
+		t.Fatalf("send composer should have 3 fields, got %d", len(m.composerFlds))
 	}
-	// A known non-destructive verb with an arg dispatches (no error block; the echo
-	// is the last block, the result arrives async).
-	m = run(consoleModel(), "peek 5")
-	if b := lastTx(m); b.kind != txEcho || b.text != "peek 5" {
-		t.Fatalf("peek 5 should echo and dispatch, got %+v", b)
-	}
-	// `use` switches the active resource.
-	m = run(consoleModel(), "use dlq")
-	if r, _ := m.selectedResource(); r.Name != "dlq" {
-		t.Fatalf("use dlq should select dlq, got %q", r.Name)
+	m.composerFlds[0].value = "hello"
+	m.composerFlds[2].value = "tier=gold"
+	next, _ := m.composerSubmit()
+	m = next.(model)
+	if m.composerMode {
+		t.Fatal("submit should close the composer")
 	}
 }
 
@@ -165,60 +203,6 @@ func TestInlinePayloadParsing(t *testing.T) {
 	got = inlinePayload("put", `report.txt the body here`)
 	if !strings.Contains(got, `"key":"report.txt"`) || !strings.Contains(got, `"body":"the body here"`) {
 		t.Fatalf("put inline payload = %s", got)
-	}
-}
-
-func TestComposerFlow(t *testing.T) {
-	m := run(consoleModel(), "send") // no args → composer (body/group/attributes)
-	if !m.composerMode || len(m.composerFlds) != 3 {
-		t.Fatalf("send should open a 3-field composer, got mode=%v n=%d", m.composerMode, len(m.composerFlds))
-	}
-	// Fill body, Tab past group, fill attributes, submit.
-	m.cmd.SetValue("hello")
-	m = send(m, key("tab")) // save body, move to group
-	m = send(m, key("tab")) // move to attributes
-	m.cmd.SetValue("tier=gold")
-	next, _ := m.composerSubmit()
-	m = next.(model)
-	if m.composerMode {
-		t.Fatal("submit should close the composer")
-	}
-	if b := lastTx(m); b.kind != txEcho || !strings.Contains(b.text, "send") {
-		t.Fatalf("composer submit should echo send, got %+v", b)
-	}
-}
-
-func TestConsoleHistoryAndCompletion(t *testing.T) {
-	m := run(consoleModel(), "peek 3")
-	m = run(m, "send hi")
-	// ↑ recalls the most recent command.
-	m.recallHistory(-1)
-	if m.cmd.Value() != "send hi" {
-		t.Fatalf("history up = %q, want 'send hi'", m.cmd.Value())
-	}
-	m.recallHistory(-1)
-	if m.cmd.Value() != "peek 3" {
-		t.Fatalf("history up×2 = %q, want 'peek 3'", m.cmd.Value())
-	}
-	// Inline ghost completion: typing a verb prefix surfaces the matching verb.
-	m2 := consoleModel()
-	m2.cmd.ShowSuggestions = true
-	m2.cmd.SetValue("pu")
-	m2.refreshSuggestions()
-	if got := m2.cmd.CurrentSuggestion(); got != "purge" {
-		t.Fatalf("ghost for 'pu' = %q, want 'purge'", got)
-	}
-	// After `use `, resource names become the candidates.
-	m2.cmd.SetValue("use em")
-	m2.refreshSuggestions()
-	if got := m2.cmd.CurrentSuggestion(); got != "use emails" {
-		t.Fatalf("ghost for 'use em' = %q, want 'use emails'", got)
-	}
-	// `send ` expects a message body.
-	m3 := consoleModel()
-	m3.cmd.SetValue("send ")
-	if h := m3.argHint(); h != "<message body>" {
-		t.Fatalf("arg hint for 'send ' = %q, want '<message body>'", h)
 	}
 }
 
@@ -244,7 +228,7 @@ func TestCharSelectionText(t *testing.T) {
 	}
 }
 
-func TestConsoleRenders(t *testing.T) {
+func TestInspectorRenders(t *testing.T) {
 	m := threeInstances()
 	m.cursor = 2 // media (s3)
 	m.cmd = textinput.New()
@@ -253,17 +237,21 @@ func TestConsoleRenders(t *testing.T) {
 	m.adminName = "media"
 	m.adminActs = []control.ActionView{
 		{ID: "browse", Label: "Browse", Kind: "bucket"},
+		{ID: "put", Label: "Put object", Kind: "bucket", InputHint: "key"},
 		{ID: "empty", Label: "Empty", Kind: "bucket", Destructive: true},
 	}
-	m.adminRes = []control.ResourceView{{Kind: "bucket", Name: "uploads", Status: "3 objects"}}
-	m.adminVP = viewport.New(60, 8)
-	m.adminTx = []txBlock{{kind: txInfo, text: "connected to media"}}
-	m.adminVP.SetContent(m.renderTranscript(m.adminVP.Width))
+	m.adminRes = []control.ResourceView{{Kind: "bucket", Name: "uploads", Status: "2 objects"}}
+	m.itemVP = viewport.New(60, 12)
+	m.inspItems = []inspItem{
+		{title: "logo.png", meta: "12K · 2026", delArg: "logo.png"},
+		{title: "data.json", meta: "1.2K · 2026", delArg: "data.json"},
+	}
+	m.refreshItemView()
 	out := m.View()
-	// header instance, resource rail, verb hint, and the exit affordance.
-	for _, want := range []string{"media", "uploads", "browse", "empty", "esc"} {
+	// header instance, the resource rail, the item list, and the action bar.
+	for _, want := range []string{"media", "uploads", "logo.png", "put", "delete", "esc"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("console view missing %q:\n%s", want, out)
+			t.Fatalf("inspector view missing %q:\n%s", want, out)
 		}
 	}
 }
