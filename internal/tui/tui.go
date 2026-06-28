@@ -326,6 +326,7 @@ func Run(socketPath string) error {
 	ci := textinput.New()
 	ci.Prompt = "❯ "
 	ci.CharLimit = 512
+	ci.ShowSuggestions = true // fish-style inline ghost completion (Tab/→ accepts)
 	m := model{
 		client:  c,
 		follow:  true,
@@ -545,6 +546,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.adminCursor >= len(m.adminRes) {
 					m.adminCursor = max(0, len(m.adminRes)-1)
 				}
+				m.refreshSuggestions() // resources changed → refresh `use` candidates
 			}
 		}
 		return m, nil
@@ -959,6 +961,7 @@ func (m model) openConsole(v control.InstanceView) (tea.Model, tea.Cmd) {
 	m.adminVP.GotoBottom()
 	m.cmd.SetValue("")
 	m.cmd.Placeholder = ""
+	m.refreshSuggestions()
 	return m, tea.Batch(fetchResources(m.client, v.Name), m.cmd.Focus())
 }
 
@@ -993,17 +996,17 @@ func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Tab on an empty prompt switches resource; otherwise it falls through to the
+	// textinput, which accepts the inline ghost suggestion.
+	if msg.String() == "tab" && strings.TrimSpace(m.cmd.Value()) == "" {
+		m.cycleResource(1)
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.adminMode = false
 		m.cmd.Blur()
-		return m, nil
-	case "tab":
-		if strings.TrimSpace(m.cmd.Value()) == "" {
-			m.cycleResource(1)
-		} else {
-			m.completeVerb()
-		}
 		return m, nil
 	case "shift+tab":
 		m.cycleResource(-1)
@@ -1029,6 +1032,7 @@ func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.cmd, cmd = m.cmd.Update(msg)
+	m.refreshSuggestions() // keep the ghost candidates in sync with the new text
 	return m, cmd
 }
 
@@ -1205,20 +1209,50 @@ func (m *model) recallHistory(dir int) {
 	m.cmd.CursorEnd()
 }
 
-// completeVerb completes the first word of the prompt against the verb list.
-func (m *model) completeVerb() {
+// refreshSuggestions updates the prompt's inline ghost-completion candidates to
+// match the cursor context: verbs while typing the command, full "use <resource>"
+// strings after a `use`. The textinput matches them as whole-value prefixes and
+// renders the remainder as faint ghost text (Tab/→ accepts).
+func (m *model) refreshSuggestions() {
 	val := m.cmd.Value()
-	if strings.Contains(strings.TrimRight(val, " "), " ") {
-		return // past the verb — nothing to complete
-	}
-	prefix := strings.TrimSpace(val)
-	for _, v := range m.verbList() {
-		if strings.HasPrefix(v, prefix) {
-			m.cmd.SetValue(v + " ")
-			m.cmd.CursorEnd()
-			return
+	fields := strings.Fields(val)
+	endsSpace := strings.HasSuffix(val, " ")
+	var sug []string
+	switch {
+	case len(fields) == 0 || (len(fields) == 1 && !endsSpace):
+		sug = m.verbList()
+	case fields[0] == "use" || fields[0] == "cd":
+		for _, r := range m.adminRes {
+			sug = append(sug, fields[0]+" "+r.Name)
 		}
 	}
+	m.cmd.SetSuggestions(sug)
+}
+
+// argHint is the faint placeholder shown after a complete verb, describing the
+// argument it expects (e.g. "peek " → "[count]", "send " → "<message body>").
+func (m model) argHint() string {
+	val := m.cmd.Value()
+	fields := strings.Fields(val)
+	if len(fields) == 0 || (len(fields) == 1 && !strings.HasSuffix(val, " ")) {
+		return "" // still typing the verb (the ghost handles that)
+	}
+	if len(fields) >= 2 {
+		return "" // an argument is already being typed
+	}
+	verb := fields[0]
+	if a, ok := m.actionByID(verb); ok {
+		if a.InputHint != "" {
+			return "<" + a.InputHint + ">"
+		}
+		if verb == "peek" || verb == "browse" {
+			return "[count]"
+		}
+	}
+	if verb == "use" || verb == "cd" {
+		return "<resource>"
+	}
+	return ""
 }
 
 // renderTranscript lays the REPL scrollback out for the viewport: command echoes
@@ -1679,6 +1713,13 @@ func (m model) consolePrompt(w int) string {
 		return stErr.Render("⚠ "+m.adminPending+"?  ") + stAccent.Render("y") + stFaint.Render(" confirm · any other key cancel")
 	}
 	left := m.cmd.View()
+	// The textinput renders the inline ghost when a suggestion matches; otherwise
+	// show the expected-argument placeholder right after the cursor.
+	if m.cmd.CurrentSuggestion() == "" {
+		if h := m.argHint(); h != "" {
+			left += stFaint.Render(" " + h)
+		}
+	}
 	hint := stFaint.Render(strings.Join(m.verbList(), "  "))
 	gap := w - lipgloss.Width(left) - lipgloss.Width(hint)
 	if gap < 3 {

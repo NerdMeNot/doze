@@ -161,12 +161,25 @@ func TestConsoleHistoryAndCompletion(t *testing.T) {
 	if m.cmd.Value() != "peek 3" {
 		t.Fatalf("history up×2 = %q, want 'peek 3'", m.cmd.Value())
 	}
-	// Tab completes a verb prefix.
+	// Inline ghost completion: typing a verb prefix surfaces the matching verb.
 	m2 := consoleModel()
+	m2.cmd.ShowSuggestions = true
 	m2.cmd.SetValue("pu")
-	m2.completeVerb()
-	if m2.cmd.Value() != "purge " {
-		t.Fatalf("completion of 'pu' = %q, want 'purge '", m2.cmd.Value())
+	m2.refreshSuggestions()
+	if got := m2.cmd.CurrentSuggestion(); got != "purge" {
+		t.Fatalf("ghost for 'pu' = %q, want 'purge'", got)
+	}
+	// After `use `, resource names become the candidates.
+	m2.cmd.SetValue("use em")
+	m2.refreshSuggestions()
+	if got := m2.cmd.CurrentSuggestion(); got != "use emails" {
+		t.Fatalf("ghost for 'use em' = %q, want 'use emails'", got)
+	}
+	// `send ` expects a message body.
+	m3 := consoleModel()
+	m3.cmd.SetValue("send ")
+	if h := m3.argHint(); h != "<message body>" {
+		t.Fatalf("arg hint for 'send ' = %q, want '<message body>'", h)
 	}
 }
 
