@@ -195,29 +195,34 @@ func TestInspectorNav(t *testing.T) {
 	}
 }
 
-func TestInspectorRailFocus(t *testing.T) {
+func TestInspectorTabs(t *testing.T) {
 	m := inspectorModel()
-	m.railFocus = true // start on the left menu (as openConsole does)
 	m.refreshItemView()
-	// → drills into the item list (focus shifts to items).
-	m = send(m, key("right"))
-	if m.railFocus {
-		t.Fatal("→ should move focus to the item list")
-	}
-	// now ↓ moves the item cursor.
+	// ↓ always moves the item list (no focus juggling).
 	m = send(m, key("down"))
 	if m.inspCursor != 1 {
-		t.Fatalf("item down → inspCursor %d, want 1", m.inspCursor)
+		t.Fatalf("down → inspCursor %d, want 1", m.inspCursor)
 	}
-	// ← returns focus to the menu.
-	m = send(m, key("left"))
-	if !m.railFocus {
-		t.Fatal("← should return focus to the menu")
-	}
-	// ↓ on the menu moves the resource selection, not the item cursor.
-	m = send(m, key("down"))
+	// →/← switch the resource tab.
+	m = send(m, key("right"))
 	if m.adminCursor != 1 {
-		t.Fatalf("rail down → adminCursor %d, want 1", m.adminCursor)
+		t.Fatalf("right → adminCursor %d, want 1", m.adminCursor)
+	}
+	m = send(m, key("left"))
+	if m.adminCursor != 0 {
+		t.Fatalf("left → adminCursor %d, want 0", m.adminCursor)
+	}
+}
+
+func TestTabHitTest(t *testing.T) {
+	m := inspectorModel() // tabs: "emails(2 msgs→2)" active, "orders.fifo"
+	// The first tab starts at column 1; clicking there selects index 0.
+	if got := m.tabAt(1); got != 0 {
+		t.Fatalf("tabAt(1) = %d, want 0", got)
+	}
+	// A column far to the right past both tabs is a miss.
+	if got := m.tabAt(500); got != -1 {
+		t.Fatalf("tabAt(500) = %d, want -1", got)
 	}
 }
 

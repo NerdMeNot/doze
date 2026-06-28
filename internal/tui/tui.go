@@ -514,7 +514,6 @@ type model struct {
 	inspExpanded bool // detail pane open for the selected item
 	inspErr      string
 	inspRouting  bool // topic: showing a test publish's routing — pause live reload
-	railFocus    bool // true = ↑↓ move the resource rail (left); false = the item list
 
 	// composer: a multi-field form for create actions (send/publish/put). The
 	// active field is edited in cmd; Tab cycles fields, Enter submits.
@@ -671,14 +670,11 @@ func (m *model) layout() {
 	// logs box: rightW minus its rounded border (2) and horizontal padding (2×2).
 	m.logVP.Width = max(4, m.rightW()-6)
 	m.logVP.Height = max(3, m.bodyH()-detailH-6)
-	// inspector item list: the right column minus the rail, the body height between
-	// the header/rule and the rule/footer.
-	m.itemVP.Width = max(10, m.width-m.adminLeftW()-5)
-	m.itemVP.Height = max(3, m.height-4)
+	// inspector item list: full width, the body height between the tab strip and
+	// the footer (header, rule, tabs, rule … rule, footer = 6 chrome rows).
+	m.itemVP.Width = max(10, m.width-2)
+	m.itemVP.Height = max(3, m.height-6)
 }
-
-// adminLeftW is the width of the inspector's resource list column.
-func (m model) adminLeftW() int { return clampi(m.width/4, 22, 36) }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -847,31 +843,16 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.composerMode {
 			return m, nil
 		}
-		overRail := msg.X < m.adminLeftW()
+		const tabRow = 2     // header(0) rule(1) tabs(2) rule(3) list(4…)
+		const listTop = 4    // first row of the item list
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			if overRail {
-				if m.adminCursor > 0 {
-					m.railFocus = true
-					m.selectResourceByIndex(m.adminCursor - 1)
-					return m, m.loadItems()
-				}
-				return m, nil
-			}
 			if m.inspCursor > 0 {
 				m.inspCursor--
 				m.refreshItemView()
 			}
 			return m, nil
 		case tea.MouseButtonWheelDown:
-			if overRail {
-				if m.adminCursor < len(m.adminRes)-1 {
-					m.railFocus = true
-					m.selectResourceByIndex(m.adminCursor + 1)
-					return m, m.loadItems()
-				}
-				return m, nil
-			}
 			if m.inspCursor < len(m.inspItems)-1 {
 				m.inspCursor++
 				m.refreshItemView()
@@ -881,29 +862,24 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if msg.Action != tea.MouseActionPress {
 				return m, nil
 			}
-			if overRail {
-				// Rail rows: header(0) blank(1) then 2 rows per resource → screen row
-				// 2(chrome)+2+2*i. Map a click back to the resource index.
-				m.railFocus = true
-				if i := (msg.Y - headerRows - 2) / 2; i >= 0 {
+			if msg.Y == tabRow { // click a resource tab to switch
+				if i := m.tabAt(msg.X); i >= 0 {
 					if m.selectResourceByIndex(i) {
 						return m, m.loadItems()
 					}
 				}
-				m.refreshItemView()
 				return m, nil
 			}
-			// Right column: ~2 rows per item from the list top, offset by scroll.
-			m.railFocus = false
-			row := msg.Y - headerRows + m.itemVP.YOffset
+			// The item list: ~2 rows per item from the list top, offset by scroll.
+			row := msg.Y - listTop + m.itemVP.YOffset
 			if idx := row / 2; idx >= 0 && idx < len(m.inspItems) {
 				if idx == m.inspCursor {
 					m.inspExpanded = !m.inspExpanded
 				} else {
 					m.inspCursor, m.inspExpanded = idx, false
 				}
+				m.refreshItemView()
 			}
-			m.refreshItemView()
 			return m, nil
 		}
 		return m, nil
@@ -1284,7 +1260,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) openConsole(v control.InstanceView) (tea.Model, tea.Cmd) {
 	m.adminMode, m.adminErr, m.adminLoaded = true, "", false
 	m.adminCursor, m.adminPending = 0, ""
-	m.railFocus = true // start on the left menu — pick a queue/bucket/topic first
 	m.inspItems, m.inspCursor, m.inspExpanded, m.inspErr, m.inspRouting = nil, 0, false, "", false
 	m.itemVP.SetContent(stFaint.Render("loading…"))
 	m.itemVP.GotoTop()
@@ -1320,66 +1295,38 @@ func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	kind := m.resKind()
 	switch msg.String() {
 	case "esc", "q":
-		switch {
-		case !m.railFocus && m.inspExpanded: // collapse the open item
+		if m.inspExpanded { // collapse the open item first
 			m.inspExpanded = false
 			m.refreshItemView()
-		case !m.railFocus: // back out to the resource menu
-			m.railFocus = true
-			m.refreshItemView()
-		default: // already on the menu — leave the console
-			m.adminMode = false
-		}
-		return m, nil
-	case "up", "k":
-		if m.railFocus { // move the resource menu (left)
-			if m.adminCursor > 0 {
-				m.selectResourceByIndex(m.adminCursor - 1)
-				return m, m.loadItems()
-			}
 			return m, nil
 		}
-		if m.inspCursor > 0 { // move the item list (right)
+		m.adminMode = false
+		return m, nil
+	case "up", "k": // move the item list
+		if m.inspCursor > 0 {
 			m.inspCursor--
 		}
 		m.refreshItemView()
 		return m, nil
 	case "down", "j":
-		if m.railFocus {
-			if m.adminCursor < len(m.adminRes)-1 {
-				m.selectResourceByIndex(m.adminCursor + 1)
-				return m, m.loadItems()
-			}
-			return m, nil
-		}
 		if m.inspCursor < len(m.inspItems)-1 {
 			m.inspCursor++
 		}
 		m.refreshItemView()
 		return m, nil
-	case "right", "l":
-		if m.railFocus && len(m.inspItems) > 0 { // drill from the menu into the items
-			m.railFocus = false
-			m.refreshItemView()
-		}
-		return m, nil
-	case "left", "h":
-		if !m.railFocus { // back to the menu
-			m.railFocus = true
-			m.refreshItemView()
-		}
-		return m, nil
+	case "left", "h", "shift+tab": // previous resource tab
+		m.cycleResource(-1)
+		return m, m.loadItems()
+	case "right", "l", "tab": // next resource tab
+		m.cycleResource(1)
+		return m, m.loadItems()
 	case "g", "home":
-		if !m.railFocus {
-			m.inspCursor, m.inspExpanded = 0, false
-			m.refreshItemView()
-		}
+		m.inspCursor, m.inspExpanded = 0, false
+		m.refreshItemView()
 		return m, nil
 	case "G", "end":
-		if !m.railFocus {
-			m.inspCursor, m.inspExpanded = max(0, len(m.inspItems)-1), false
-			m.refreshItemView()
-		}
+		m.inspCursor, m.inspExpanded = max(0, len(m.inspItems)-1), false
+		m.refreshItemView()
 		return m, nil
 	case "pgup", "ctrl+u":
 		m.itemVP.HalfViewUp()
@@ -1388,22 +1335,7 @@ func (m model) handleAdminKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.itemVP.HalfViewDown()
 		return m, nil
 	case "enter", " ":
-		if m.railFocus { // drill into the selected resource's items
-			if len(m.inspItems) > 0 {
-				m.railFocus = false
-				m.refreshItemView()
-			}
-			return m, nil
-		}
 		m.inspExpanded = !m.inspExpanded
-		m.refreshItemView()
-		return m, nil
-	case "tab": // toggle focus between the menu and the item list
-		if m.railFocus && len(m.inspItems) > 0 {
-			m.railFocus = false
-		} else {
-			m.railFocus = true
-		}
 		m.refreshItemView()
 		return m, nil
 	case "r":
@@ -1466,14 +1398,10 @@ func (m *model) refreshItemView() {
 	cursorTop, line := 0, 0
 	for i, it := range m.inspItems {
 		sel := i == m.inspCursor
-		switch {
-		case sel && !m.railFocus: // focused item — bright cursor
+		if sel {
 			cursorTop = line
 			b.WriteString(stAccent.Render("▸ ") + stAccent.Bold(true).Render(truncate(it.title, w-2)) + "\n")
-		case sel: // selected but the menu has focus — muted cursor
-			cursorTop = line
-			b.WriteString(stDim.Render("▸ ") + stText.Render(truncate(it.title, w-2)) + "\n")
-		default:
+		} else {
 			b.WriteString("  " + stText.Render(truncate(it.title, w-2)) + "\n")
 		}
 		line++
@@ -2136,80 +2064,91 @@ func (m model) viewHelp() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
 }
 
-// viewConsole is the resource console: a thin resource rail on the left, the REPL
-// transcript + live prompt on the right, framed by a breadcrumb header and a
-// status/hints footer. The prompt is the focus — you drive it by typing.
+// viewConsole is the resource console: a breadcrumb header, a tab strip of the
+// instance's resources (queues/buckets/topics), the selected resource's contents
+// as a single navigable list, and a context action footer. One list to move
+// through, ←→ to switch resource — no focus juggling.
 func (m model) viewConsole() string {
-	railW := m.adminLeftW()
-	rightW := max(12, m.width-railW-3)
-	bodyH := max(4, m.height-4)
+	bodyH := max(3, m.height-6)
 
 	v, _ := m.selected()
 	title := stTitle.Render("◆ "+m.adminName) + stDim.Render("  "+v.Engine)
-	if r, ok := m.selectedResource(); ok {
-		title += stFaint.Render("  ▸ ") + stText.Render(r.Name)
-	}
 	back := stFaint.Render("esc exit")
 	gap := max(1, m.width-lipgloss.Width(title)-lipgloss.Width(back))
 	header := title + strings.Repeat(" ", gap) + back
 	rule := stFaint.Render(strings.Repeat("─", max(1, m.width)))
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.consoleRail(railW, bodyH),
-		stFaint.Render(" │ "),
-		m.inspectorMain(rightW, bodyH))
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, rule, body, rule, m.inspectorFooter())
+	return lipgloss.JoinVertical(lipgloss.Left,
+		header, rule, m.consoleTabs(), rule,
+		m.inspectorMain(m.width, bodyH),
+		rule, m.inspectorFooter())
 }
 
-// consoleRail is the resource list, the active one marked and bright.
-func (m model) consoleRail(w, h int) string {
-	kind := "resources"
-	if len(m.adminRes) > 0 {
-		kind = m.adminRes[0].Kind + "s"
+// tabLabels are the resource tab captions — name + a live count + any badge — used
+// by both the rendered strip and mouse hit-testing.
+func (m model) tabLabels() []string {
+	out := make([]string, len(m.adminRes))
+	for i, r := range m.adminRes {
+		label := r.Name
+		if n := resCount(r); n != "" {
+			label += "(" + n + ")"
+		}
+		if b := resBadges(r); b != "" {
+			label += " " + b
+		}
+		out[i] = label
 	}
-	hdr := stLabel.Render(strings.ToUpper(kind))
-	if m.railFocus { // mark the focused pane
-		hdr = stAccent.Bold(true).Render(strings.ToUpper(kind))
-	}
-	rows := []string{hdr, ""}
+	return out
+}
+
+// consoleTabs renders the resource tab strip, the active resource bracketed and
+// bright.
+func (m model) consoleTabs() string {
 	switch {
 	case m.adminErr != "" && len(m.adminRes) == 0:
-		rows = append(rows, stErr.Render("✕ "+truncate(m.adminErr, w-1)))
+		return " " + stErr.Render("✕ "+truncate(m.adminErr, m.width-3))
 	case !m.adminLoaded:
-		rows = append(rows, stFaint.Render("loading…"))
+		return " " + stFaint.Render("loading…")
 	case len(m.adminRes) == 0:
-		rows = append(rows, stFaint.Render("(none)"))
-	default:
-		for i, r := range m.adminRes {
-			name := truncate(r.Name, w-2)
-			switch {
-			case i == m.adminCursor && m.railFocus: // focused selection — bright
-				rows = append(rows, stAccent.Render("▸ ")+stAccent.Bold(true).Render(name))
-			case i == m.adminCursor: // selected, but the item list has focus — muted
-				rows = append(rows, stDim.Render("▸ ")+stText.Render(name))
-			default:
-				rows = append(rows, "  "+stText.Render(name))
-			}
-			status := r.Status
-			if badge := resBadges(r); badge != "" {
-				if status != "" {
-					status += "  "
-				}
-				status += badge
-			}
-			if status != "" {
-				rows = append(rows, stFaint.Render("  "+truncate(status, w-2)))
-			}
+		return " " + stFaint.Render("(no resources)")
+	}
+	labels := m.tabLabels()
+	tabs := make([]string, len(labels))
+	for i, label := range labels {
+		if i == m.adminCursor {
+			tabs[i] = stAccent.Bold(true).Render("‹"+label+"›")
+		} else {
+			tabs[i] = stDim.Render(" " + label + " ")
 		}
 	}
-	for len(rows) < h {
-		rows = append(rows, "")
+	return " " + truncate(strings.Join(tabs, stFaint.Render("  ")), m.width-2)
+}
+
+// tabAt maps an x column on the tab row to a resource index, or -1.
+func (m model) tabAt(x int) int {
+	pos := 1 // leading space
+	for i, label := range m.tabLabels() {
+		segW := lipgloss.Width(" " + label + " ")
+		if i == m.adminCursor {
+			segW = lipgloss.Width("‹" + label + "›")
+		}
+		if x >= pos && x < pos+segW {
+			return i
+		}
+		pos += segW + 2 // "  " separator
 	}
-	if len(rows) > h {
-		rows = rows[:h]
+	return -1
+}
+
+// resCount extracts the leading message/object count from a resource's status
+// line ("4 msgs" → "4") for the compact tab caption.
+func resCount(r control.ResourceView) string {
+	if f := strings.Fields(r.Status); len(f) > 0 {
+		if _, err := strconv.Atoi(f[0]); err == nil {
+			return f[0]
+		}
 	}
-	return lipgloss.NewStyle().Width(w).Render(strings.Join(rows, "\n"))
+	return ""
 }
 
 // resBadges renders a resource's salient traits (FIFO, dead-letter protection)
@@ -2279,32 +2218,19 @@ func (m model) inspectorFooter() string {
 	kind := m.resKind()
 	key := func(k, l string) string { return stAccent.Render(k) + stDim.Render(" "+l) }
 	sep := stFaint.Render("  ·  ")
-	var parts []string
-	if m.railFocus {
-		// Focused on the resource menu: navigate it and drill in.
-		parts = []string{key("↑↓", "pick "+kind), key("→ ↵", "open")}
-		switch kind {
-		case "queue":
-			parts = append(parts, key("n", "send"), key("P", "purge"), key("R", "redrive"))
-		case "bucket":
-			parts = append(parts, key("n", "put"), key("P", "empty"))
-		case "topic":
-			parts = append(parts, key("n", "test publish"))
-		}
-		parts = append(parts, key("r", "refresh"), key("esc", "exit"))
-	} else {
-		// Focused on the item list.
-		parts = []string{key("↑↓", "move"), key("↵", "expand"), key("←", "menu")}
-		switch kind {
-		case "queue":
-			parts = append(parts, key("n", "send"), key("d", "delete"), key("P", "purge"), key("R", "redrive"))
-		case "bucket":
-			parts = append(parts, key("n", "put"), key("d", "delete"), key("P", "empty"))
-		case "topic":
-			parts = append(parts, key("n", "test publish"))
-		}
-		parts = append(parts, key("r", "refresh"), key("esc", "menu"))
+	parts := []string{key("↑↓", "move"), key("↵", "expand")}
+	switch kind {
+	case "queue":
+		parts = append(parts, key("n", "send"), key("d", "delete"), key("P", "purge"), key("R", "redrive"))
+	case "bucket":
+		parts = append(parts, key("n", "put"), key("d", "delete"), key("P", "empty"))
+	case "topic":
+		parts = append(parts, key("n", "test publish"))
 	}
+	if len(m.adminRes) > 1 {
+		parts = append(parts, key("←→", kind))
+	}
+	parts = append(parts, key("r", "refresh"), key("esc", "exit"))
 	left := strings.Join(parts, sep)
 	var right string
 	if m.inspRouting {
