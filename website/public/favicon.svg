@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- doze: a crescent nightlight -->
+  <path d="M22.5 4.5a12.5 12.5 0 1 0 5 23.2A13.8 13.8 0 0 1 15 14.3 13.8 13.8 0 0 1 22.5 4.5Z" fill="#f0ad4e"/>
+  <circle cx="24.5" cy="8.5" r="1.6" fill="#ffce86"/>
+</svg>

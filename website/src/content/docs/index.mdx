@@ -1,0 +1,96 @@
+---
+title: doze
+description: Real databases on your laptop — asleep until you need them. No Docker, no JVM, no always-on stack.
+template: splash
+hero:
+  title: Real databases on your laptop — asleep until you need them.
+  tagline: >-
+    doze runs Postgres, Valkey, Kvrocks, a Mongo-compatible store, and local
+    S3, SQS, and SNS as real, native processes — no Docker, no JVM. Declare
+    what your app needs in one file; doze boots each engine the moment
+    something connects and puts it back to sleep when you walk away. At rest,
+    your whole backend is one ~15 MB daemon.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /start/getting-started/
+      icon: right-arrow
+    - text: Why doze?
+      link: /why/doze/
+      variant: minimal
+---
+
+import { Card, CardGrid, Code } from '@astrojs/starlight/components';
+
+export const heroHcl = `# doze.hcl — your whole local backend, declared
+postgres "app"   { version = 18 }
+valkey   "cache" { version = 9 }
+
+s3 "uploads" {
+  port       = 9000
+  versioning = true
+}`;
+
+export const heroSh = `$ brew install doze-dev/tap/doze
+$ doze up
+  ✓ app (postgres 18) ready   ✓ cache (valkey 9) ready   ✓ uploads (s3) ready
+$ doze status
+  ● app     postgres 18   active   127.0.0.1:5432
+  ○ cache   valkey 9      asleep   wakes on connect`;
+
+<div style="max-width: 46rem; margin-inline: auto;">
+  <Code code={heroHcl} lang="hcl" title="doze.hcl" />
+  <Code code={heroSh} lang="shellsession" title="terminal" />
+</div>
+
+## Pick your path
+
+<CardGrid>
+  <Card title="Use doze" icon="rocket">
+    Install it, declare your backend, and get on with your app. Real engines,
+    lazy boot, one lockfile for the whole team.
+    [Install →](/start/install/) · [Getting started →](/start/getting-started/)
+  </Card>
+  <Card title="Understand it" icon="open-book">
+    Why native processes beat containers for development, why HCL, and an
+    honest look at the alternatives.
+    [The case for doze →](/why/doze/)
+  </Card>
+  <Card title="Build a module" icon="puzzle">
+    Every engine is a signed plugin — and third-party modules are exactly as
+    capable as official ones. Start from a working template.
+    [Author guide →](/modules/overview/)
+  </Card>
+  <Card title="Run a registry" icon="setting">
+    The registry is static files with signatures. Host your own, mirror the
+    binaries, go fully air-gapped.
+    [Operator guide →](/registry/trust-architecture/)
+  </Card>
+</CardGrid>
+
+## Three promises
+
+<CardGrid>
+  <Card title="Signed, always" icon="approve-check">
+    Every module index and archive carries an ed25519 signature; publisher keys
+    pin on first use. Tampered or unsigned → rejected, not warned.
+  </Card>
+  <Card title="Locked, automatically" icon="seti:lock">
+    You declare only the engine version. doze selects the newest compatible
+    module release and freezes everything in `doze.lock` — commit it, and CI
+    runs byte-identical software.
+  </Card>
+  <Card title="Updated on your say-so" icon="up-caret">
+    Pins never drift. `doze modules upgrade --check` reports, `upgrade` moves
+    them — and any error that needs a newer module names that exact command.
+  </Card>
+</CardGrid>
+
+## Browse the engines
+
+Postgres, Valkey, Kvrocks, FerretDB (Mongo-compatible), MariaDB, Temporal, and
+built-in S3/SQS/SNS — each with its full, generated config reference.
+
+**[The module registry →](/registry/)** · or stay in the terminal:
+`doze modules search` · `doze modules docs <name>`

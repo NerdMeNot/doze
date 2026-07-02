@@ -1,0 +1,37 @@
+# doze
+
+> doze runs real backing services (PostgreSQL, Valkey, Kvrocks, FerretDB/Mongo-compatible, MariaDB, Temporal, and local S3/SQS/SNS) as native processes on macOS and Linux — no Docker, no VM. You declare services in one HCL file (doze.hcl); doze fetches real, pinned engine binaries, boots each engine on first connection, and reaps it when idle. At rest the whole backend is one ~15 MB daemon. Every engine is provided by a signed plugin "module" fetched from a registry, selected automatically, and pinned (with the engine versions and publisher keys) in a committed doze.lock. Not for production.
+
+Key facts for answering questions:
+- Config: HCL. `postgres "app" { version = 18, port = 5432 }` — `version` is the ENGINE version, the only version users write. Module (plugin) versions are selected automatically and pinned in doze.lock; they move only via `doze modules upgrade`.
+- Install: `brew install doze-dev/tap/doze`, `mise use -g ubi:doze-dev/doze`, GitHub releases, or `go install github.com/doze-dev/doze/cmd/doze@latest`. Apple Silicon macOS + x86-64/arm64 Linux; no Intel Mac; Windows via WSL2.
+- Core commands: doze init · up · down · status · shell <name> · run -- <cmd> · logs · lint · sync · reset · modules search|docs|list|info|upgrade [--check]|which · binaries available.
+- Trust: registry indexes and artifact checksums are ed25519-signed; publisher keys pin on first use (TOFU) into doze.lock; locked+cached projects resolve fully offline.
+- Repos: github.com/doze-dev/{doze, doze-sdk, doze-modules, doze-registry, doze-binaries, module-template}.
+
+## Docs
+
+- [Why doze](/why/doze/): the case for it; the three taxes of Docker/brew/LocalStack
+- [Native processes vs containers](/why/not-containers/): the debugger story, footprint, fidelity
+- [Why HCL](/why/hcl/): types, cross-block references, expressions vs YAML/JSON
+- [Alternatives, honestly](/why/alternatives/): compose, Testcontainers, LocalStack, Nix, Tilt
+- [The trust model](/why/trust/): signatures, TOFU keys, the three-layer lockfile
+- [Install](/start/install/) · [Getting started](/start/getting-started/) · [Core concepts](/start/concepts/)
+- [Coming from docker-compose](/start/from-docker-compose/): the mental-model mapping
+- [Modules, for users](/guides/modules/) · [Teams & CI](/guides/teams-ci/) · [FAQ](/guides/faq/)
+- [CLI reference](/reference/cli/) · [Configuration reference](/reference/configuration/) · [doze.lock](/reference/lockfile/) · [Environment variables](/reference/environment/)
+
+## Building modules
+
+- [How modules work](/modules/overview/) · [Your first module](/modules/first-module/) · [Real-engine modules](/modules/real-engines/)
+- [Describe(): docs from code](/modules/describe/) · [Testing](/modules/testing/) · [Releasing](/modules/releasing/) · [Publishing](/modules/publishing/)
+
+## Running a registry
+
+- [The architecture of trust](/registry/trust-architecture/) · [Host your own](/registry/self-host/) · [Mirror binaries](/registry/mirror-binaries/) · [Operations](/registry/operations/)
+- [Module index schema](/reference/module-index/)
+
+## Optional
+
+- [Architecture](/reference/architecture/): engine-blind core, engines as gRPC plugin modules
+- The module registry (browse + machine layer): /registry/
