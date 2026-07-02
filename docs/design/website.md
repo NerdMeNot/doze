@@ -232,12 +232,20 @@ Module index schema (schema-1) `[registry README extract]` · Architecture
   cobra, docs-snippet CI, redirect old GitHub docs links via docs/README
   pointers.
 
-## Open decisions
+## Decisions (resolved 2026-07-03)
 
-1. Worker router (A) vs composite build (B) — recommended A, above.
-2. Does the registry landing page get demoted to a plain redirect/banner once
-   the docs landing exists, or keep both? (Recommend: keep `/registry` browse,
-   redirect its root pitch sections to docs.)
-3. Domain: stay on `doze.nerdmenot.in` or move to a product domain later —
-   affects nothing structurally (the Worker makes moving cheap), but affects
-   llms.txt/SEO timing.
+1. **Worker router (A).** A ~15-line Worker on `doze.nerdmenot.in/*` forwards
+   `/registry*` to the registry Pages project and everything else to the docs
+   project — two independent deploy pipelines behind one domain.
+2. **Registry landing retires.** Under the router only `/registry*` reaches the
+   registry site, so its root hero page naturally stops being served. Its good
+   content (pitch, install strip, trust strip) migrates to the docs landing —
+   one pitch, one place; `/registry/` (the browse grid) becomes the registry's
+   front page.
+3. **Domain: `doze.nerdmenot.in` stays** for now. The Worker makes a future
+   move a one-line change.
+4. **Dark AND light mode, day one.** Starlight ships both (toggle + system
+   preference). The palette is defined as paired light/dark tokens: the
+   registry's amber-on-dark becomes the dark theme; a proper light counterpart
+   is designed, not inverted. The registry pages adopt the same tokens (and
+   gain light mode) in P2 so mode-switching never reveals a seam.
