@@ -537,7 +537,7 @@ func (m *model) setFlash(s string) { m.flash = s; m.flashFrame = m.frame }
 func Run(socketPath string) error {
 	c := control.NewClient(socketPath)
 	if !c.Available() {
-		return fmt.Errorf("no daemon is running (boot an instance with `doze start <name>`)")
+		return fmt.Errorf("no daemon is running (boot an instance with `doze wake <name>`)")
 	}
 	loadTheme() // restore the last-used theme
 	fi := textinput.New()
@@ -2538,7 +2538,7 @@ func (m model) viewDetail(v control.InstanceView, w int) string {
 	case v.LastError != "":
 		status = stErr.Render("✕ " + truncate(v.LastError, w-6))
 	case v.Tainted:
-		status = stErr.Render("✕ structure incomplete — run `doze apply` to re-converge")
+		status = stErr.Render("✕ structure incomplete — run `doze sync` to re-converge")
 	case isProc && (st == "active" || st == "idle"):
 		// A process is a supervised app: report liveness/health, not connections.
 		switch {

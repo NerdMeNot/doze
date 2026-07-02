@@ -43,10 +43,29 @@ func main() {
 		modMgr.UseLock(func() string {
 			return filepath.Join(configDir(configPath), binaries.LockFileName)
 		})
-		// Apply the modules{} block (mirror/enable/version pins) before any driver
-		// is resolved. Fetching stays off unless the env mirror or the block enables it.
+		// Apply the modules{} block (mirror/enable/source/version pins) before any
+		// driver is resolved. Fetching stays off unless the env mirror or the block
+		// enables it.
 		config.SetModulesConfigurer(func(mc config.ModulesConfig) {
-			modMgr.Configure(mc.Mirror, mc.Enabled, mc.Sources)
+			modMgr.Configure(mc.Mirror, mc.Enabled, mc.Sources, mc.Versions)
+		})
+		// Feed each declared engine version into module selection (pre-lookup),
+		// validate every block against the pinned module's engine support
+		// (post-decode), and annotate remote-decode failures with the module
+		// identity + upgrade availability.
+		config.SetEngineRequirer(modMgr.Require)
+		config.SetModuleSupportChecker(modMgr.CheckSupport)
+		config.SetLookupErrorReporter(modMgr.LastError)
+		config.SetRemoteDecodeHint(func(engineType string) string {
+			pin, source, ok := modMgr.Pinned(engineType)
+			if !ok {
+				return ""
+			}
+			hint := fmt.Sprintf("this block is decoded by module %s %s (pinned in doze.lock)", source, pin.Version)
+			if up := modMgr.UpgradeHint(engineType); up != "" {
+				hint += "; " + up
+			}
+			return hint
 		})
 		resolvers = append(resolvers, modMgr.Lookup)
 	}

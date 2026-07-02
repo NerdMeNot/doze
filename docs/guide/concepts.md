@@ -56,7 +56,7 @@ laptop running doze is quiet: nothing runs unless something is using it — at r
 it's one ~15 MB daemon and zero engine processes (see
 [Resource footprint](resource-footprint.md)).
 
-You can reap on demand (`doze stop <name>`), boot eagerly (`doze start <name>`), or just let
+You can reap on demand (`doze sleep <name>`), boot eagerly (`doze wake <name>`), or just let
 it happen.
 
 ## Waking back up
@@ -85,7 +85,7 @@ because the data and provisioning survive, knocking is cheap.
 
 ## Convergence: structure, not data
 
-When an instance boots fresh (and whenever you run `doze apply`), doze **converges**
+When an instance boots fresh (and whenever you run `doze sync`), doze **converges**
 it to the shape you declared:
 
 - Postgres → databases, roles, schemas, grants, extensions
@@ -98,18 +98,20 @@ stops at *structure*: doze never seeds rows or runs your migrations. Your
 application owns its data; doze owns the scaffolding so the data has somewhere to
 live.
 
-## Endpoints and environment injection
+## Endpoints and connection strings
 
-Apps shouldn't hardcode ports. `doze run` and `doze env` compute each instance's
-address and connection string and inject them:
+Apps shouldn't have to guess ports — and they don't have to. Every instance
+listens on the explicit `port` you declared in `doze.hcl`, so its address and
+connection string are **stable and deterministic**. There are three honest ways
+to get a URL into your app:
 
-- a unique `DOZE_<NAME>_URL` for every instance, plus
-- the conventional variable for its engine when exactly one instance claims it:
-  `DATABASE_URL` (postgres), `REDIS_URL` (valkey/kvrocks), `MONGODB_URI`
-  (documentdb), `AWS_ENDPOINT_URL_S3`/`_SQS`/`_SNS` plus dummy `AWS_*` credentials.
-
-The current set is also written to `.doze/endpoints.yaml` for other tooling to
-read.
+1. **Write the stable URL directly** in your app config or `.env` —
+   `postgresql://app:app@127.0.0.1:5432/app`, `redis://127.0.0.1:6379`,
+   `mongodb://127.0.0.1:27017/`. Connecting cold-boots the instance.
+2. **Declare your app as a `process` block** — doze injects each declared
+   dependency's `env_var` → its URL automatically when it runs the process.
+3. **Read `.doze/endpoints.yaml`** — the daemon writes the current address and
+   connection string for every instance there, for other tooling to consume.
 
 ## Real engines, pinned for reproducibility
 

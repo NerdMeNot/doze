@@ -26,7 +26,10 @@ sns "events" {
 ```
 
 ```sh
-eval "$(doze env)"             # AWS_ENDPOINT_URL_SNS / _SQS + creds
+# SNS and SQS each listen on the explicit port you declared; set both endpoints:
+export AWS_ENDPOINT_URL_SNS=http://127.0.0.1:9100
+export AWS_ENDPOINT_URL_SQS=http://127.0.0.1:9200
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
 aws sns publish \
   --topic-arn arn:aws:sns:us-east-1:000000000000:signups \
   --message "welcome!"
@@ -100,7 +103,8 @@ sns "events" {
 ## Wire it into an app
 
 ```sh
-# Publisher and subscribers all read the injected endpoint + creds:
+# Publisher and subscribers read the endpoint + creds from their own env
+# (exported as above, or injected via a `process` block); doze ensures SNS is up:
 doze run -- ./publisher
 doze run -- ./consumer
 ```
@@ -112,5 +116,5 @@ doze run -- ./consumer
 ## Notes
 
 - Topics/subscriptions declared in config are created on boot (and re-converged by
-  `doze apply`); you can also Subscribe/Publish dynamically via the SDK.
+  `doze sync`); you can also Subscribe/Publish dynamically via the SDK.
 - ARNs use the conventional local account `000000000000` and region `us-east-1`.

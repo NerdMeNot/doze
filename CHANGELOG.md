@@ -29,13 +29,15 @@ and reaps when idle.
 - **Per-instance proxy**: one listener per instance; a connection lazily boots
   the instance (coalesced via `singleflight`) and splices byte-for-byte. Reaping
   keys on connection count, never query inactivity.
-- **`doze run` / `doze env`**: ensure instances up and inject connection strings
-  (`DATABASE_URL`, `REDIS_URL`, `MONGODB_URI`, `AWS_ENDPOINT_URL_*` + dummy
-  creds, plus `DOZE_<NAME>_URL`); `.doze/endpoints.yaml` manifest.
+- **`doze run`**: ensure the daemon is up, then run a command (backends boot on
+  connect, reap when idle). Connection strings come from the explicit per-instance
+  ports (stable URLs), from supervised `process` blocks (which get their
+  dependencies' `env_var` → URL injected), or from the `.doze/endpoints.yaml`
+  manifest the daemon publishes.
 - **Instance dependencies**: derived from the config reference graph, a dependent
   boots and holds its dependencies (e.g. SNS → SQS instance), releasing them on stop.
-- **Copy-on-write templates & `doze ephemeral`**: `initdb` once per version,
-  clone per instance (CoW); throwaway, isolated databases per test run.
+- **Copy-on-write templates**: `initdb` once per version, clone per instance (CoW)
+  for fast first boot; `doze reset` re-clones for a clean slate per test run.
 - **Multi-file config**: `doze.hcl` + merged sibling `*.doze.hcl` files (or
   `--config <dir>`), with positioned, file/line config diagnostics and
   "did you mean?" hints.

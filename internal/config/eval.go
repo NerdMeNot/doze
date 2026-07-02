@@ -112,7 +112,7 @@ func (cfg *Config) evaluate(parser *hclparse.Parser, pending []*pendingInstance,
 		}
 		switch dec := p.drv.(type) {
 		case engine.ConfigDecoder: // in-tree engine
-			spec, err := dec.DecodeConfig(p.remain, decodeCtx, p.baseDir)
+			spec, err := dec.DecodeConfig(p.remain, decodeCtx, p.baseDir, p.decl.Version)
 			if err != nil {
 				return fmt.Errorf("%s %q: %w", p.decl.Type, p.decl.Name, err)
 			}
@@ -124,9 +124,13 @@ func (cfg *Config) evaluate(parser *hclparse.Parser, pending []*pendingInstance,
 			}
 			// Find the block by its source label (the count/for_each base), not the
 			// expanded instance name; the each/count vars in decodeCtx differentiate stamps.
-			spec, err := dec.DecodeRemote(src, p.decl.Type, p.blockLabel, mergedVars(ctx, decodeCtx), p.baseDir)
+			spec, err := dec.DecodeRemote(src, p.decl.Type, p.blockLabel, mergedVars(ctx, decodeCtx), p.baseDir, p.decl.Version)
 			if err != nil {
-				return fmt.Errorf("%s %q: %w", p.decl.Type, p.decl.Name, err)
+				// The block was decoded by a specific module release; say which, and
+				// (best-effort, error path only) whether an upgrade would help — a
+				// schema mismatch on an old plugin should read as its fix, not as an
+				// opaque "unsupported argument".
+				return fmt.Errorf("%s %q: %w%s", p.decl.Type, p.decl.Name, err, remoteDecodeErrSuffix(p.decl.Type))
 			}
 			p.decl.Spec = spec
 		}

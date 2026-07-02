@@ -54,7 +54,7 @@ Sanity-check it any time:
 doze doctor
 #   ✓  config        doze.hcl parses cleanly
 #   ✓  postgres/app  16 (not pinned; resolves on first use)
-#   ✓  daemon        stopped (start with `doze start`)
+#   ✓  daemon        stopped (starts on first connect, or `doze up`)
 ```
 
 ## 3. Connect — and watch it boot itself
@@ -116,7 +116,7 @@ few seconds) — you never have to think about starting or stopping it. See
 You can watch all of this live:
 
 ```sh
-doze dash      # an interactive dashboard; select a row to boot/reap/restart it
+doze dash      # an interactive dashboard; select a row to wake/sleep it
 ```
 
 ## 5. Add a cache
@@ -151,47 +151,45 @@ Two engines, one file. Each has its own endpoint and its own lifecycle.
 
 ## 6. Wire it into your app
 
-Your app shouldn't hardcode ports. Let doze inject the connection strings:
+Your app shouldn't hardcode ports — except it doesn't have to. Every instance
+listens on the explicit `port` you declared, so its URL is **stable and
+deterministic**. Two honest ways to wire it in:
 
 ```sh
 doze run -- <your dev server>     # npm run dev · rails server · go run ./... · python manage.py runserver
 ```
 
-`doze run` ensures the daemon is up, exports each instance's connection string
-into the environment, and runs your command — whatever language it's in. Your app
-reads the standard variables it already knows:
+`doze run` just ensures the daemon and your backends are up, then runs your
+command — whatever language it's in. Your app connects to the stable URLs you put
+in its config (cold-booting each instance on first connect):
 
-- `DATABASE_URL` → the `app` Postgres
-- `REDIS_URL` → the `cache` Valkey
+- `postgresql://app:app@127.0.0.1:5432/app` → the `app` Postgres
+- `redis://127.0.0.1:6379` → the `cache` Valkey
 
-Prefer to work in your shell?
+Drop those straight into your `.env`, no magic required.
 
-```sh
-eval "$(doze env)"
-echo "$DATABASE_URL"
-```
-
-> Each instance also gets a unique `DOZE_<NAME>_URL` (e.g. `DOZE_APP_URL`). The
-> friendly `DATABASE_URL`/`REDIS_URL` is set when exactly one instance claims it;
-> with two Postgres instances, use the `DOZE_<NAME>_URL` form.
+> Prefer doze to inject them for you? Declare your app as a `process` block and
+> doze sets each dependency's `env_var` to its URL automatically. The daemon also
+> writes the current set to `.doze/endpoints.yaml` for other tooling to read.
 
 ## 7. A throwaway database for your tests
 
-Want an isolated, real database for a test run that vanishes afterward?
+Want a clean, real database for a test run? Reset the instance to a fresh slate,
+then run your suite against it:
 
 ```sh
-doze ephemeral app -- pytest
+doze reset app          # wipe app's data; it re-provisions + converges on next boot
+doze run -- pytest      # ensures backends are up, then runs your tests
 ```
 
-doze clones `app` copy-on-write (instant on APFS/reflink filesystems), runs your
-tests against the clone, then reaps and deletes it. Perfect for parallel suites
-where each run needs a clean database.
+`doze reset` gives you back a pristine `app` (structure converged, zero rows),
+perfect when a run needs a known-clean database.
 
 ## You've got the model
 
-That's the whole loop: **declare** in `doze.hcl`, **use** via `doze run`/`doze
-env` or a direct connection, and let doze **boot on demand** and **reap when
-idle**. From here:
+That's the whole loop: **declare** in `doze.hcl`, **use** via `doze run` or a
+direct connection to the stable port, and let doze **boot on demand** and **reap
+when idle**. From here:
 
 - **[Why doze](why-doze.md)** — the case against docker-compose / native installs,
   and **[the footprint numbers](resource-footprint.md)** behind "quiet laptop."

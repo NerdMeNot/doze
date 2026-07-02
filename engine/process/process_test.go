@@ -17,7 +17,7 @@ func decode(t *testing.T, src string) (*Config, error) {
 	if diags.HasErrors() {
 		t.Fatalf("parsing test HCL: %s", diags.Error())
 	}
-	c, err := Driver{}.DecodeConfig(f.Body, nil, ".")
+	c, err := Driver{}.DecodeConfig(f.Body, nil, ".", "")
 	if err != nil {
 		return nil, err
 	}

@@ -27,7 +27,9 @@ sqs "jobs" {
 ```
 
 ```sh
-eval "$(doze env)"                 # AWS_ENDPOINT_URL_SQS + dummy creds
+# SQS listens on the explicit port you declared; set the endpoint + dummy creds:
+export AWS_ENDPOINT_URL_SQS=http://127.0.0.1:9200
+export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
 url=$(aws sqs get-queue-url --queue-name emails --query QueueUrl --output text)
 aws sqs send-message    --queue-url "$url" --message-body "hello"
 aws sqs receive-message --queue-url "$url" --wait-time-seconds 5
@@ -92,14 +94,15 @@ doze computes the AWS attribute MD5, so SDK checksum validation passes.
 
 ## Wire it into an app
 
-Set the endpoint; credentials/region come from the injected env.
+Set the endpoint; credentials/region come from your env (exported as above, or
+injected via a `process` block).
 
 **Go:** `o.BaseEndpoint = aws.String(os.Getenv("AWS_ENDPOINT_URL_SQS"))`
 **Node v3:** `new SQSClient({ endpoint: process.env.AWS_ENDPOINT_URL_SQS })`
 **boto3:** `boto3.client("sqs", endpoint_url=os.environ["AWS_ENDPOINT_URL_SQS"])`
 
 ```sh
-doze run -- ./worker        # processes the queue with the env in place
+doze run -- ./worker        # processes the queue, backends guaranteed up
 ```
 
 ## Common operations

@@ -39,7 +39,7 @@ func (fakeDriver) WaitReady(context.Context, engine.Instance, engine.Toolchain, 
 }
 func (fakeDriver) BackendSocket(string, int) string                             { return "" }
 func (fakeDriver) ConnString(engine.Instance, engine.Endpoint) (string, string) { return "", "" }
-func (fakeDriver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, _ string) (engine.EngineConfig, error) {
+func (fakeDriver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, _ string, _ engine.VersionSpec) (engine.EngineConfig, error) {
 	var s struct {
 		Color string `hcl:"color,optional"`
 		Ref   string `hcl:"ref,optional"`

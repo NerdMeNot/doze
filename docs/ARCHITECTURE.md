@@ -102,7 +102,7 @@ to the SNS worker for fanout.
 | `internal/endpoints` | Per-instance client addresses, connection strings, and `.doze/endpoints.yaml`. |
 | `internal/ui` | Shared, color-gated CLI/TUI vocabulary: palette, state coloring, ANSI-aware table, cross-platform RAM, uptime. Plain when piped or `NO_COLOR`. |
 | `internal/control` | Newline-delimited JSON admin IPC over a unix socket. |
-| `internal/daemon` | Wires runtime + per-instance proxy listeners + reaper + control into the daemon (`doze start --foreground`). |
+| `internal/daemon` | Wires runtime + per-instance proxy listeners + reaper + control into the daemon (the hidden `doze __daemon` self-exec, started automatically on first use). |
 | `internal/tui` | Charm Bubble Tea dashboard. |
 | `engine/postgres` | The Postgres driver: cluster (`initdb`/conf/hba), convergence, extensions, the startup/TLS/cancel `ProxyFilter`, CoW `Templater`, `BackendProvider`. |
 | `engine/valkey`, `engine/kvrocks` | Redis-protocol drivers (required methods only). |

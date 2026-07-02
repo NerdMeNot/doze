@@ -6,7 +6,11 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/gob"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -277,23 +281,32 @@ func (r *Runtime) bootLocked(ctx context.Context, name string, cond engine.Condi
 	go r.watch(name, proc)           // detect an unexpected exit and mark it reaped
 
 	// Converge to the declared structure when the instance has not yet fully
-	// converged — on a fresh provision, or on any later boot whose prior converge
-	// never completed (marker absent). A failure tears the backend down and taints
-	// the instance, so incomplete structure never silently serves.
-	if c, ok := drv.(engine.Converger); ok && (fresh || !r.isConverged(name)) {
-		if err := c.Converge(ctx, inst, tc, inst.Endpoint); err != nil {
-			r.reg.SetTainted(name)
-			r.logf("convergence for %q failed: %v", name, err)
-			r.mu.Lock() // delete before Stop so the crash watcher no-ops
-			delete(r.procs, name)
-			delete(r.deps, name)
-			r.mu.Unlock()
-			_ = proc.Stop(context.Background())
-			r.removePidfile(name)
-			return fail(fmt.Errorf("provisioning %q: %w", name, err))
+	// converged — on a fresh provision, on any later boot whose prior converge never
+	// completed (marker absent), or when the config drifted since the last successful
+	// converge (the persisted fingerprint differs). Converge is idempotent, so re-
+	// running on drift simply applies the new structure. A failure tears the backend
+	// down and taints the instance, so incomplete structure never silently serves —
+	// note this means a bad config edit takes a previously-working instance offline
+	// on its next reconnect, which is the intended fail-loud behavior.
+	if c, ok := drv.(engine.Converger); ok {
+		fp := specFingerprint(inst)
+		persisted, marked := r.convergedFingerprint(name)
+		drifted := marked && persisted != fp
+		if fresh || !marked || drifted {
+			if err := c.Converge(ctx, inst, tc, inst.Endpoint); err != nil {
+				r.reg.SetTainted(name)
+				r.logf("convergence for %q failed: %v", name, err)
+				r.mu.Lock() // delete before Stop so the crash watcher no-ops
+				delete(r.procs, name)
+				delete(r.deps, name)
+				r.mu.Unlock()
+				_ = proc.Stop(context.Background())
+				r.removePidfile(name)
+				return fail(fmt.Errorf("provisioning %q: %w", name, err))
+			}
+			r.markConverged(name, fp)
+			r.reg.ClearTainted(name)
 		}
-		r.markConverged(name)
-		r.reg.ClearTainted(name)
 	}
 
 	// post_start runs once the instance is up and (for Healthy) ready. A failure
@@ -589,21 +602,61 @@ func backoffFor(base time.Duration, attempt int) time.Duration {
 // fully applied — so a provisioned-but-unconverged instance (e.g. one whose first
 // converge failed and was torn down) re-converges on its next boot instead of
 // silently serving incomplete structure. `doze reset` deletes the data dir and
-// with it the marker.
+// with it the marker. The file content is the spec fingerprint at the time of the
+// successful converge, so a later config edit (a different fingerprint) re-converges
+// even on a plain lazy boot — see specFingerprint and the boot guard.
 func (r *Runtime) convergedMarkerPath(name string) string {
 	return filepath.Join(r.cfg.ClusterDir(name), ".doze-converged")
 }
 
 func (r *Runtime) isConverged(name string) bool {
-	_, err := os.Stat(r.convergedMarkerPath(name))
-	return err == nil
+	_, ok := r.convergedFingerprint(name)
+	return ok
 }
 
-func (r *Runtime) markConverged(name string) {
-	_ = os.WriteFile(r.convergedMarkerPath(name), nil, 0o644)
+// convergedFingerprint returns the spec fingerprint persisted at the last
+// successful converge and whether the marker exists at all. A pre-existing empty
+// marker (written before fingerprints were stored) returns ("", true) — treated as
+// an unknown fingerprint so the next boot re-converges once, then rewrites it.
+func (r *Runtime) convergedFingerprint(name string) (fp string, ok bool) {
+	b, err := os.ReadFile(r.convergedMarkerPath(name))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
+}
+
+func (r *Runtime) markConverged(name, fp string) {
+	_ = os.WriteFile(r.convergedMarkerPath(name), []byte(fp), 0o644)
 }
 
 func (r *Runtime) clearConvergedMarker(name string) { _ = os.Remove(r.convergedMarkerPath(name)) }
+
+// specFingerprint returns a stable hash of an instance's decoded config, used to
+// detect drift between boots. For plugin engines inst.Spec is a *plugin.RawSpec
+// holding the gob bytes the plugin produced from config; we hash those bytes
+// directly (host-side, no RPC) via the Raw() accessor. For any in-tree spec we
+// gob-encode it first. Returns "" when there is no spec to fingerprint.
+func specFingerprint(inst engine.Instance) string {
+	var raw []byte
+	switch s := inst.Spec.(type) {
+	case nil:
+		return ""
+	case interface{ Raw() []byte }: // *plugin.RawSpec — opaque plugin config bytes
+		raw = s.Raw()
+	default:
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(inst.Spec); err != nil {
+			return "" // unfingerprintable in-tree spec: fall back to marker-presence semantics
+		}
+		raw = buf.Bytes()
+	}
+	if len(raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
 
 // pidfilePath is where a running backend's pid is recorded for reconciliation.
 func (r *Runtime) pidfilePath(name string) string {
@@ -831,7 +884,7 @@ func (r *Runtime) ensureConverged(ctx context.Context, name string) error {
 		r.reg.SetError(name, err.Error())
 		return err
 	}
-	r.markConverged(name)
+	r.markConverged(name, specFingerprint(inst))
 	r.reg.ClearTainted(name)
 	return nil
 }

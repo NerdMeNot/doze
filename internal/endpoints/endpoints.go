@@ -1,6 +1,6 @@
 // Package endpoints derives each declared instance's client-facing address and
-// connection string, and writes the .doze/endpoints.yaml manifest that
-// `doze run`/`doze env` and external tooling consume.
+// connection string, and writes the .doze/endpoints.yaml manifest that the
+// daemon, supervised `process` blocks, and external tooling consume.
 //
 // The address assignment lives here (not in daemon) so the CLI can compute the
 // same endpoints the daemon listens on without importing the daemon.

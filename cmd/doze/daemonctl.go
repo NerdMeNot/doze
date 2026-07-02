@@ -223,7 +223,7 @@ func logsCmd() *cobra.Command {
 
 // --- helpers ---
 
-// startDaemon launches the daemon (`doze start --foreground`) as a detached
+// startDaemon launches the daemon (the hidden `doze __daemon` self-exec) as a detached
 // background process whose output is redirected to the daemon log file, then
 // waits for it to come up.
 func startDaemon(cfg *config.Config) error {

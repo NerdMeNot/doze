@@ -21,11 +21,13 @@ valkey "cache" {
 }
 ```
 
+The URL is stable — `redis://127.0.0.1:6379` (add `:cache@` for the password), and
+connecting cold-boots the instance:
+
 ```sh
-doze run -- sh -c 'redis-cli -u "$REDIS_URL" ping'      # -> PONG
-eval "$(doze env)"
-redis-cli -u "$REDIS_URL" set greeting hello
-redis-cli -u "$REDIS_URL" get greeting
+redis-cli -u redis://127.0.0.1:6379 ping              # -> PONG
+redis-cli -u redis://127.0.0.1:6379 set greeting hello
+redis-cli -u redis://127.0.0.1:6379 get greeting
 ```
 
 ## A durable KV store (Kvrocks)
@@ -69,29 +71,29 @@ kvrocks "store" {
 }
 ```
 
-Both claim `REDIS_URL`, so with two of them use the per-instance variables:
+Each has its own stable URL — they differ only by the explicit `port` you declared:
 
 ```sh
-doze run -- sh -c '
-  redis-cli -u "$DOZE_CACHE_URL" set session:42 active
-  redis-cli -u "$DOZE_STORE_URL" set user:42  "{...}"
-'
+redis-cli -u redis://127.0.0.1:6379 set session:42 active   # cache
+redis-cli -u redis://127.0.0.1:6380 set user:42  "{...}"    # store
 ```
+
+A `process` block that depends on both gets each one injected under its own
+`env_var`.
 
 ## Common tasks
 
 ```sh
-eval "$(doze env)"
-redis-cli -u "$REDIS_URL" flushall            # wipe everything
-redis-cli -u "$REDIS_URL" info keyspace       # how many keys
-redis-cli -u "$REDIS_URL" monitor             # watch commands live
-doze stop cache                                # put it to sleep now
+redis-cli -u redis://127.0.0.1:6379 flushall            # wipe everything
+redis-cli -u redis://127.0.0.1:6379 info keyspace       # how many keys
+redis-cli -u redis://127.0.0.1:6379 monitor             # watch commands live
+doze sleep cache                                         # put it to sleep now
 ```
 
 ## Tips
 
 - **Valkey is a drop-in Redis fork** — your `ioredis`/`redis-py`/`go-redis` code
-  needs no changes; just read `REDIS_URL`.
+  needs no changes; just point it at the stable `redis://127.0.0.1:<port>`.
 - **Pick by durability:** ephemeral cache → `valkey`; data you don't want to lose
   on a reap → `kvrocks`.
 - **`maxmemory`** (Valkey) caps memory; pair it with an eviction policy from your

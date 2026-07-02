@@ -1,98 +1,133 @@
 # Recipes — Workflows
 
-How to drive doze day to day: injecting connections, ephemeral test databases,
-operating the daemon, and CI.
+How to drive doze day to day: getting connection strings into your code, running
+tests and dev servers, operating the stack, and CI.
 
 ## `doze run` — the everyday command
 
-Ensures the daemon is up, injects every instance's connection string, runs your
-command, and propagates its exit code. Instances boot on first connect, reap
-after.
+Ensures the daemon is up, runs your command, and propagates its exit code.
+Instances boot on first connect and reap after — so `run` guarantees the backends
+are awake before your command touches them.
 
 ```sh
 doze run -- npm test
 doze run -- go test ./...
 doze run -- python manage.py runserver
-doze run -- sh -c 'echo "$DATABASE_URL"'
 ```
 
-## `doze env` — export into your shell
+`run` injects **nothing** into the environment. Your command connects using the
+connection strings you already configured (see below).
+
+## Getting connection strings into your code
+
+doze doesn't export env vars for you. There are three honest ways to get a
+connection string into your app:
+
+**1. Stable URLs from explicit ports (the simple default).** Every instance listens
+on the explicit `port` you declared, so its URL is deterministic. Put it straight in
+your app config or `.env`:
 
 ```sh
-eval "$(doze env)"          # DATABASE_URL, REDIS_URL, AWS_ENDPOINT_URL_*, …
-psql "$DATABASE_URL" -c '\dt'
+# .env
+DATABASE_URL=postgresql://app:app@127.0.0.1:5432/app
+REDIS_URL=redis://127.0.0.1:6379
+AWS_ENDPOINT_URL_S3=http://127.0.0.1:9000
 ```
 
-`doze env` prints `export` lines; the current set is also written to
-`.doze/endpoints.yaml` for other tooling.
+Connecting cold-boots the instance, so `psql postgresql://app:app@127.0.0.1:5432/app`
+just works whether or not it was already awake.
 
-## Ephemeral databases
+**2. Declare the app as a `process` block (zero-config injection for your apps).**
+When doze supervises your app, it injects each dependency's connection string (its
+`env_var` → URL) into the process environment automatically:
 
-`doze ephemeral <instance>` boots a throwaway **copy-on-write clone** (instant on
-APFS/reflink), injects its connection string, runs the command, then reaps and
-deletes it — an isolated, real database per run.
-
-```sh
-doze ephemeral app -- pytest                 # one disposable DB for the suite
-doze ephemeral app -- go test ./...
-doze ephemeral app                           # boot one, print its URL, wait (Ctrl-C destroys)
+```hcl
+process "api" {
+  command    = "go run ./cmd/api"
+  depends_on = { postgres.app = "healthy", valkey.cache = "healthy" }
+}
 ```
 
-Per-test isolation in parallel suites — give each worker its own clone:
-
 ```sh
-# pytest-xdist: one ephemeral DB per worker process
-pytest -n 4 -p no:cacheprovider \
-  --dist=loadgroup
-# or wrap each invocation:
-doze ephemeral app -- pytest tests/billing
-doze ephemeral app -- pytest tests/orders   # fully isolated from the first
+doze up            # boots app + cache, then runs api with DATABASE_URL/REDIS_URL set
+doze logs api -f   # follow it
 ```
 
-## Lifecycle
+**3. Read the manifest (for tooling).** The daemon writes `.doze/endpoints.yaml`
+with every instance's address and connection string — machine-readable, for scripts
+that would rather parse than hardcode.
 
-The daemon starts automatically; you drive **instances**:
+## Test databases
+
+Wrap your suite so the backends are up, then connect via the stable URL:
 
 ```sh
-doze start app        # boot one backend now (warms it up; daemon auto-starts)
-doze start --all      # boot every declared instance
-doze start -f         # run the daemon in the foreground (styled output, debugging)
-doze stop app         # reap one backend (data persists; next connect re-boots)
-doze stop --all       # stop everything — every backend and the daemon itself
-doze restart app      # restart one backend (reap + re-boot)
+doze run -- pytest
+doze run -- go test ./...
+```
+
+Want a clean slate between runs? `doze reset` wipes an instance's data and
+re-converges its declared structure (roles, databases, schemas) on the next
+connect — your schema back, no rows:
+
+```sh
+doze reset app     # wipe app's data
+doze run -- pytest # fresh schema, re-provisioned on first connect
+```
+
+For parallel suites that need isolation, give each worker its own database within
+one instance (e.g. a `test_${worker}` database your test harness creates and drops),
+rather than a separate engine per worker.
+
+## Operating the stack
+
+```sh
+doze up               # converge structure + boot every enabled service, then detach
+doze up api worker    # just these (and their deps)
+doze down             # sleep everything and stop the daemon
+
+doze wake app         # boot one service now (and its deps)
+doze wake             # warm every enabled service
+doze sleep app        # reap one service (and its dependents); daemon keeps running
+doze sleep            # reap all awake services
+
+doze sync             # reconcile declared structure (create/update/prune)
+doze sync --dry-run   # preview the changes; boots nothing
 ```
 
 ## Observability
 
 ```sh
-doze status           # table: engine, colored state, conns, CPU, RAM, uptime, endpoint, PID
+doze status           # grouped table: state, endpoint, conns, MEM, CPU, deps
+doze status --graph   # the dependency tree
 doze ls               # alias for status
-doze dash             # interactive TUI: select a row, then b boot / d reap / R restart / l logs
-doze logs             # tail the daemon log
-doze logs app -f      # follow a backend's logs
+doze dash             # interactive TUI: select a row, then b boot / d reap / R restart / f follow
+doze logs             # aggregate logs of every running service
+doze logs app -f      # follow one service's logs
 doze doctor           # diagnose config, platform, toolchains, daemon state
-doze binaries available [engine] # versions available from the mirror (installed/pinned marked)
+doze binaries available [engine]  # versions from the mirror (installed/pinned marked)
 doze binaries list    # resolved/cached toolchains per instance
 ```
 
-`doze status` works even when the daemon is stopped (it shows on-disk state). An
-instance that failed to boot shows state `error` with the reason; piped output is
-plain (no color), so it's safe in scripts.
+`doze status` works even when the daemon is stopped (it shows declared, on-disk
+state). A backend that failed to boot shows state `error` with the reason; piped
+output is plain (no color), so it's safe in scripts.
 
 ## CI
 
-Simplest — wrap the test command:
+Simplest — wrap the test command so the backends are up:
 
 ```sh
 doze run -- go test ./...
 ```
 
-Or bring up the env once and reuse it (connections boot what they touch):
+Or bring the stack up once and reuse it across steps (connections boot what they
+touch):
 
 ```sh
-eval "$(doze env)"
+doze up                  # converge + boot, then detach
 ./run-migrations && ./integration-tests
-doze stop --all
+doze down                # sleep everything and stop the daemon
 ```
 
 Tips for CI:

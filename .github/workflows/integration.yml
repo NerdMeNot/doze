@@ -1,0 +1,45 @@
+# End-to-end suite: boot the real doze CLI against real engine plugins + real
+# backend binaries on both Linux and macOS, and assert behaviour (see
+# test/integration). This is what proves the engines actually work — and work on
+# Linux — which the unit tests (fake drivers) can't.
+#
+# It builds plugins from a sibling doze-modules checkout and, by default, lets doze
+# fetch each backend binary from the registry (needs network). It is heavy and can
+# be flaky against live infra, so it runs on demand + nightly rather than on every
+# PR. To make a run hermetic, pre-build a backend and pass DOZE_<ENGINE>_BINDIR.
+#
+# NOTE: while doze-sdk is pre-release, doze-modules' go.mod has `replace doze-sdk =>
+# ../doze-sdk`, so doze-sdk is checked out as a sibling too. Drop it once the SDK is
+# tagged and the replace becomes a version pin.
+name: integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *' # nightly, 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: doze }
+      - uses: actions/checkout@v4
+        with: { repository: doze-dev/doze-modules, path: doze-modules }
+      - uses: actions/checkout@v4
+        with: { repository: doze-dev/doze-sdk, path: doze-sdk }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: doze/go.mod
+      - name: Run e2e suite
+        working-directory: doze
+        env:
+          DOZE_MODULES_DIR: ${{ github.workspace }}/doze-modules
+        run: go test -tags integration -v -timeout 20m ./test/integration/...

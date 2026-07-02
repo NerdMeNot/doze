@@ -16,21 +16,22 @@ only the Mongo wire protocol. There's no version to pick and no backend to wire 
 documentdb "docs" {}
 ```
 
-That's the whole declaration. `MONGODB_URI` is injected for the `docs` instance.
+That's the whole declaration. The `docs` instance listens on its stable URI —
+`mongodb://127.0.0.1:27017/` (connecting cold-boots it), or declare your app as a
+`process` block so doze injects `MONGODB_URI` for you.
 
 ```sh
-doze run -- sh -c 'mongosh "$MONGODB_URI" --eval "db.runCommand({ping:1})"'
+doze run -- mongosh mongodb://127.0.0.1:27017/ --eval "db.runCommand({ping:1})"
 ```
 
 > **First boot is slow.** doze builds the cluster and runs `CREATE EXTENSION` the
 > first time `docs` boots (a few minutes). After that it's a normal lazy engine —
-> sub-second cold boots. Warm it ahead of time with `doze start docs`.
+> sub-second cold boots. Warm it ahead of time with `doze wake docs`.
 
 ## Use it like Mongo
 
 ```sh
-eval "$(doze env)"
-mongosh "$MONGODB_URI" --eval '
+mongosh mongodb://127.0.0.1:27017/ --eval '
   db.users.insertOne({ name: "Ada", roles: ["admin"] });
   printjson(db.users.find().toArray());
 '

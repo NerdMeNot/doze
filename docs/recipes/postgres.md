@@ -33,9 +33,13 @@ postgres "app" {
 ```
 
 ```sh
-doze run -- <your app>     # DATABASE_URL is injected; the DB boots on first use
+doze run -- <your app>     # ensures backends are up; the DB boots on first use
 doze shell app              # or open a SQL shell directly (boots `app` if cold)
 ```
+
+Point your app at the stable URL — `postgresql://app:app@127.0.0.1:5432/app`
+(connecting cold-boots the instance), or declare your app as a `process` block so
+doze injects each dependency's `env_var` → URL automatically.
 
 ## Connect a client or GUI
 
@@ -56,13 +60,15 @@ Point any tool at it — `psql`, TablePlus, DBeaver, pgAdmin, your ORM:
 | Database | `app` (the instance name) |
 | User / Password | a role you declared, e.g. `app` / `app` |
 
-The connection cold-boots the instance just like any other client. Or grab the
-ready-made URL:
+The connection cold-boots the instance just like any other client. The URL is
+stable and deterministic — it's just the role, the explicit `port`, and the
+instance name:
 
 ```sh
-eval "$(doze env)"; echo "$DATABASE_URL"
 # postgresql://app:app@127.0.0.1:6432/app
 ```
+
+(or read it from `.doze/endpoints.yaml`, the manifest the daemon writes).
 
 ## Users, roles & permissions
 
@@ -174,23 +180,28 @@ postgres "legacy" {
 }
 ```
 
-With more than one Postgres, the friendly `DATABASE_URL` isn't set (it'd be
-ambiguous) — use the per-instance variable:
+Each has its own stable URL — they differ only by the explicit `port` you declared
+(and the instance name):
 
 ```sh
-doze run -- sh -c 'echo "new=$DOZE_APP_URL  old=$DOZE_LEGACY_URL"'
+# new=postgresql://app:app@127.0.0.1:5432/app
+# old=postgresql://app:app@127.0.0.1:5433/legacy
 ```
+
+A `process` block that depends on both gets each one injected under its own
+`env_var`.
 
 ## Migrations & seeding
 
 doze converges *structure* (database, roles, schemas, extensions); your tools own
-the **schema and data**. Run them with the injected connection string:
+the **schema and data**. Run them with the backends guaranteed up (each tool reads
+the stable URL from its own config/.env):
 
 ```sh
 doze run -- npx prisma migrate dev
 doze run -- bin/rails db:migrate db:seed
 doze run -- alembic upgrade head
-doze run -- ./scripts/seed.sh        # reads DATABASE_URL
+doze run -- ./scripts/seed.sh        # reads its configured DATABASE_URL
 ```
 
 ## Reset a database
@@ -198,15 +209,15 @@ doze run -- ./scripts/seed.sh        # reads DATABASE_URL
 Sometimes you want a clean slate:
 
 ```sh
-doze stop app                                   # stop it
-rm -rf "$(doze doctor | awk '/project/{print $3}')/clusters/app"
+doze reset app                                   # wipe its data
 doze shell app                                   # next connect re-provisions + converges
 ```
 
-Or use a **disposable** clone that vanishes on its own — ideal for tests:
+For an isolated, freshly-converged database before a test run — isolation is now
+per-database-within-an-instance:
 
 ```sh
-doze ephemeral app -- pytest        # real Postgres, isolated, deleted afterward
+doze reset app && doze run -- pytest        # real Postgres, clean slate, backends up
 ```
 
 ## Tuning & tips
@@ -222,10 +233,10 @@ doze ephemeral app -- pytest        # real Postgres, isolated, deleted afterward
   }
   ```
 - **Idle reaping** is by connection count — a pool holding idle connections keeps
-  the backend alive; close them (or `doze stop app`) to let it sleep.
+  the backend alive; close them (or `doze sleep app`) to let it sleep.
 - **Pin versions** for the team: `version = "16.14"` (exact) or `version = 16`
   (newest, pinned in `doze.lock`). Run `doze binaries available postgres` to see options.
 - **TLS** for `sslmode=require` clients: see the
   [TLS reference](../reference/configuration.md#tls).
-- **Ephemeral cold boots are instant** — doze runs `initdb` once into a template
+- **Cold boots are instant** — doze runs `initdb` once into a template
   and clones it copy-on-write.

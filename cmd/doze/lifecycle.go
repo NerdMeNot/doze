@@ -13,9 +13,8 @@ import (
 
 func wakeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "wake [service]",
-		Aliases: []string{"start"},
-		Short:   "Wake a sleeping service (and its dependencies); no arg wakes all",
+		Use:   "wake [service]",
+		Short: "Wake a sleeping service (and its dependencies); no arg wakes all",
 		Long: "wake boots a service now instead of waiting for the first connection,\n" +
 			"bringing up its dependencies first. With no argument it wakes every enabled\n" +
 			"service. Disabled (enabled = false) services are skipped.",
@@ -48,9 +47,8 @@ func wakeCmd() *cobra.Command {
 
 func sleepCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "sleep [service]",
-		Aliases: []string{"stop"},
-		Short:   "Sleep a service and everything that depends on it; no arg sleeps all awake",
+		Use:   "sleep [service]",
+		Short: "Sleep a service and everything that depends on it; no arg sleeps all awake",
 		Long: "sleep reaps a running service. Named, it first sleeps every service that\n" +
 			"depends on it (so dependents drain before their dependency), then the\n" +
 			"service itself. With no argument it sleeps all awake services. The daemon\n" +

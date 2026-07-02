@@ -97,7 +97,7 @@ const (
 
 // DecodeConfig implements engine.ConfigDecoder. baseDir is the directory of the
 // file that declared the block; cwd and env_file are resolved against it.
-func (Driver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, baseDir string) (engine.EngineConfig, error) {
+func (Driver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, baseDir string, _ engine.VersionSpec) (engine.EngineConfig, error) {
 	var raw hclConfig
 	if d := gohcl.DecodeBody(body, ctx, &raw); d.HasErrors() {
 		return nil, fmt.Errorf("%s", d.Error())

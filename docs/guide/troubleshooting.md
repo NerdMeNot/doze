@@ -24,7 +24,7 @@ Another process (or a stale doze daemon) holds the listen port.
 
 ```sh
 doze status                      # is a daemon already running?
-doze stop --all                  # stop a stale daemon
+doze down                        # stop a stale daemon
 lsof -iTCP:6432 -sTCP:LISTEN     # who's on the port? (adjust to your `listen`)
 ```
 
@@ -53,11 +53,11 @@ Common causes:
   ([Extensions](../EXTENSIONS.md)).
 - **DocumentDB first boot is slow / times out** — its first boot builds a private
   Postgres cluster and runs `CREATE EXTENSION` (a few minutes). Warm it ahead of
-  time with `doze start docs`; later boots are sub-second.
+  time with `doze wake docs`; later boots are sub-second.
 - **Bad config value** — re-run `doze doctor`; config errors point at the file and
   line.
 
-After fixing config, `doze apply <instance>` (or just reconnect) re-converges.
+After fixing config, `doze sync` (or just reconnect) re-converges.
 
 ## Engine binaries won't download
 
@@ -100,7 +100,7 @@ defaults { idle_timeout = "30m" }
 
 If the daemon was killed hard (`kill -9`, a crash), macOS can't auto-kill its
 children the way Linux does. doze reclaims them automatically the next time the
-daemon starts. To clean up immediately: `doze stop --all`.
+daemon starts. To clean up immediately: `doze down`.
 
 ## Start completely fresh
 

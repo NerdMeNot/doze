@@ -27,7 +27,7 @@ func resetCmd() *cobra.Command {
 		Long: "reset stops the backend(s) and deletes their data directories. The next\n" +
 			"connection re-provisions a fresh store and re-converges the declared\n" +
 			"structure — roles, databases, schemas, extensions — so you get your schema\n" +
-			"back with no rows. It's the clean-slate counterpart to `stop` (which only\n" +
+			"back with no rows. It's the clean-slate counterpart to `sleep` (which only\n" +
 			"reaps the process).\n\n" +
 			"By default the downloaded engine toolchains are kept (immutable and\n" +
 			"checksum-verified, so re-downloading yields identical bytes). --binaries\n" +
@@ -211,7 +211,7 @@ func waitBackendStopped(cfg *config.Config, name string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("backend %q is still running; stop it (`doze stop %s`) before resetting", name, name)
+			return fmt.Errorf("backend %q is still running; sleep it (`doze sleep %s`) before resetting", name, name)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

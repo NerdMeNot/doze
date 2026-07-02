@@ -29,8 +29,8 @@ s3 "uploads" {
 
 ```sh
 $ doze run -- <your tests>      # npm test · pytest · go test · cargo test · rails test
-  ⏵ postgres/app (16.14) ready 0.2s   ⏵ valkey/cache ready 0.05s   ⏵ s3/uploads ready
-  DATABASE_URL, REDIS_URL, AWS_ENDPOINT_URL_S3 injected — and your command just runs
+  ✓ app (postgres 16) ready   ✓ cache (valkey 9) ready   ✓ uploads (s3) ready
+  real engines, booted on demand on the ports you declared — gone again when you walk away
 ```
 
 No `docker-compose.yml`. No multi-gigabyte VM humming while you're at lunch. No
@@ -80,20 +80,27 @@ go install github.com/doze-dev/doze/cmd/doze@latest
 doze init                      # writes a starter doze.hcl
 
 # 3. Use it — the database boots on the first connection
-doze psql app                  # opens a real psql shell (cold-boots `app` for you)
-doze run -- <your command>     # injects DATABASE_URL & co. into any command/language
-eval "$(doze env)"             # or export the connection strings into your shell
+doze shell app                 # opens a real psql shell (cold-boots `app` for you)
+doze run -- <your command>     # ensures the backends are up, then runs your command
 ```
 
 That's the whole loop. The first connection boots the engine and converges it to
 your declared shape (database, roles, schemas, extensions); the next connection
 is instant; stop touching it and, a few minutes later, it reaps back to zero.
 
+Each instance listens on the explicit `port` you declared, so your connection
+strings are stable — put `postgresql://app:app@127.0.0.1:5432/app` in your app
+config, or declare the app as a [`process`](docs/recipes/workflows.md) block and
+doze injects its dependencies' URLs for you.
+
 ```sh
 $ doze status
-  NAME    ENGINE   STATE    CONNS   RAM    UPTIME   ENDPOINT
-  app     postgres active   1       5M     8s       127.0.0.1:6432
-  cache   valkey   reaped   0              -        127.0.0.1:6433
+  NAME      ENGINE        STATE    ENDPOINT         CONNS   MEM     CPU
+Modules
+  ● app     postgres 16   active   127.0.0.1:5432   1c      42.5M   -
+  ○ cache   valkey 9      asleep   -                -       -       -
+
+  1 awake · 42.5M resident · connect to any endpoint to wake it
 ```
 
 ## What you can run

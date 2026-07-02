@@ -1,5 +1,6 @@
 // Package daemon wires the runtime, per-instance proxy listeners, reaper, and
-// control socket into the long-running daemon process (`doze start --foreground`).
+// control socket into the long-running daemon process (the hidden `doze __daemon`
+// self-exec, started automatically on first use).
 package daemon
 
 import (
@@ -108,7 +109,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			continue
 		}
 		// Supervised processes bind their own port — doze does not front them with a
-		// proxy. They boot eagerly via `doze up`/`doze start`, not on a connection.
+		// proxy. They boot eagerly via `doze up`/`doze wake`, not on a connection.
 		if lc, ok := drv.(engine.Lifecycle); ok && lc.Supervised(engine.Instance{Name: ep.Name, Type: ep.Engine}) {
 			d.logf("%s/%s is a supervised process; no proxy listener", ep.Engine, ep.Name)
 			continue
@@ -125,7 +126,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			_ = px.ServeInstance(ctx, ln, name, drv)
 		}()
 	}
-	// Publish the endpoint manifest for `doze run`/`doze env` and tooling.
+	// Publish the endpoint manifest for supervised processes and external tooling.
 	if err := endpoints.WriteManifest(endpoints.ManifestPath(d.cfg), eps); err != nil {
 		d.logf("warning: could not write endpoints manifest: %v", err)
 	}
@@ -135,7 +136,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("control socket: %w", err)
 	}
 
-	// Own the pidfile so `doze stop`/`status` can find us however we started.
+	// Own the pidfile so `doze down`/`status` can find us however we started.
 	pidPath := PidFilePath(d.cfg)
 	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
 		return fmt.Errorf("writing pidfile: %w", err)

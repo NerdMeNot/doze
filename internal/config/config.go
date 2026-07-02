@@ -23,6 +23,7 @@ import (
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/doze-dev/doze-sdk/engine"
@@ -62,7 +63,7 @@ type Config struct {
 }
 
 // Output is a declared output value: the connection strings or facts a stack
-// exposes. Surfaced by `doze output`.
+// exposes. Evaluated during `doze sync` and recorded in the project state.
 type Output struct {
 	Name        string
 	Value       string // rendered value
@@ -132,6 +133,10 @@ type hclModules struct {
 type hclModule struct {
 	Name   string `hcl:"name,label"`
 	Source string `hcl:"source,optional"`
+	// Version pins the MODULE (plugin) release exactly — the escape hatch for
+	// holding back a regressed release. Not the engine version: that stays
+	// `version =` on the instance block. Exact only, no ranges.
+	Version string `hcl:"version,optional"`
 }
 
 // Load reads and validates the doze configuration at path, with no variable
@@ -152,6 +157,10 @@ func LoadWithVars(path string, cliVars map[string]string) (*Config, error) {
 	hclFiles := make([]*hcl.File, 0, len(files))
 	for _, f := range files {
 		src, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		src, err = rewriteUseBlocks(src, f)
 		if err != nil {
 			return nil, err
 		}
@@ -239,9 +248,53 @@ func gatherConfigFiles(path string) (files []string, primary string, err error) 
 	return files, path, nil
 }
 
+// rewriteUseBlocks desugars `use <type> "<name>" { … }` into the bare
+// `<type> "<name>" { … }` block the rest of the pipeline expects. `use` is the
+// surface marker that a block is backed by a resolved module; the built-in
+// `process` engine stays bare and is the only engine block written without it.
+// Only the block header is rewritten — the body is preserved verbatim — so the
+// out-of-process plugin decoder, which re-parses these same bytes to find its
+// `<type> "<name>"` block (see plugin/server.go), never sees `use`. A file with no
+// `use` block is returned unchanged. The bare `<type> "<name>"` form still parses,
+// so this is purely additive.
+func rewriteUseBlocks(src []byte, filename string) ([]byte, error) {
+	f, diags := hclwrite.ParseConfig(src, filename, hcl.InitialPos)
+	if diags.HasErrors() {
+		return src, nil // defer syntax errors to the real parser, which reports them with full fidelity
+	}
+	changed := false
+	for _, blk := range f.Body().Blocks() {
+		if blk.Type() != "use" {
+			continue
+		}
+		labels := blk.Labels()
+		if len(labels) != 2 {
+			return nil, fmt.Errorf("%s: `use` takes an engine type and a name, e.g. `use postgres \"app\"` (got %d label(s))", filename, len(labels))
+		}
+		etype, name := labels[0], labels[1]
+		if etype == "process" {
+			return nil, fmt.Errorf("%s: `process` is built in, not a module — declare it as a bare `process %q` block, without `use`", filename, name)
+		}
+		if reservedBlocks[etype] {
+			return nil, fmt.Errorf("%s: %q is a reserved block, not an engine type — `use %s …` is not valid", filename, etype, etype)
+		}
+		blk.SetType(etype)
+		blk.SetLabels([]string{name})
+		changed = true
+	}
+	if !changed {
+		return src, nil
+	}
+	return f.Bytes(), nil
+}
+
 // Parse validates HCL source bytes. filename is used only for diagnostics.
 // Engine drivers must already be registered (cmd/doze blank-imports them).
 func Parse(src []byte, filename string) (*Config, error) {
+	src, err := rewriteUseBlocks(src, filename)
+	if err != nil {
+		return nil, err
+	}
 	parser := hclparse.NewParser()
 	file, diags := parser.ParseHCL(src, filename)
 	if diags.HasErrors() {
@@ -383,6 +436,17 @@ func buildConfig(parser *hclparse.Parser, body hcl.Body, primaryPath string, inp
 	if err := cfg.evaluate(parser, pending, ctx); err != nil {
 		return nil, err
 	}
+	// Post-decode engine-support pass: the FIRST block of a type drives module
+	// selection, so a later block declaring a version the resolved module can't
+	// serve is only caught here — with the block's own position and an
+	// actionable upgrade command.
+	if moduleSupportChecker != nil {
+		for _, p := range pending {
+			if err := moduleSupportChecker(p.decl.Type, string(p.decl.Version)); err != nil {
+				return nil, posErr(parser, p.defRange, err.Error(), "")
+			}
+		}
+	}
 	if err := cfg.evaluateOutputs(parser, outputBlocks, ctx); err != nil {
 		return nil, err
 	}
@@ -493,14 +557,15 @@ func (cfg *Config) decodeTLS(parser *hclparse.Parser, block *hcl.Block, ctx *hcl
 }
 
 // ModulesConfig is the decoded `modules {}` block: where to fetch out-of-process
-// engine plugins from and any per-engine source overrides. It is applied to the
-// plugin resolver before instance decode (see modulesConfigurer). There is no
-// plugin-version knob — the registry serves the current build and doze.lock pins
-// it by content hash, so reproducibility costs the developer no cognitive load.
+// engine plugins from, per-engine source overrides, and (rarely) per-engine
+// exact module-version pins. Module selection is otherwise automatic — the
+// newest release compatible with this doze and the declared engine versions —
+// and doze.lock freezes it, so reproducibility costs no cognitive load.
 type ModulesConfig struct {
-	Mirror  string            // registry base (overrides DOZE_MODULES_MIRROR)
-	Enabled bool              // fetch plugin modules (true also when a mirror is set)
-	Sources map[string]string // engine type -> source address override ("" = doze/<type>)
+	Mirror   string            // registry base (overrides DOZE_MODULES_MIRROR)
+	Enabled  bool              // fetch plugin modules (true also when a mirror is set)
+	Sources  map[string]string // engine type -> source address override ("" = doze/<type>)
+	Versions map[string]string // engine type -> exact module version pin ("" = auto)
 }
 
 // modulesConfigurer, when registered (by cmd/doze), is handed the decoded
@@ -513,18 +578,67 @@ var modulesConfigurer func(ModulesConfig)
 // during config load (before instance decode).
 func SetModulesConfigurer(fn func(ModulesConfig)) { modulesConfigurer = fn }
 
+// engineRequirer, when registered (by cmd/doze), is told each declared
+// (engine type, engine version) just before the driver lookup that may fetch its
+// module — so module selection can pick a release supporting what the project
+// declares. A package hook for the same reason as modulesConfigurer.
+var engineRequirer func(engineType, version string)
+
+// SetEngineRequirer registers the pre-lookup (engine type, version) callback.
+func SetEngineRequirer(fn func(engineType, version string)) { engineRequirer = fn }
+
+// moduleSupportChecker, when registered (by cmd/doze), validates one declared
+// (engine type, engine version) against the resolved module's supported engine
+// majors, after all driver bodies are decoded. It returns an actionable error
+// ("run 'doze modules upgrade …'") for a version the pinned module can't serve.
+var moduleSupportChecker func(engineType, version string) error
+
+// SetModuleSupportChecker registers the post-decode engine-support validator.
+func SetModuleSupportChecker(fn func(engineType, version string) error) { moduleSupportChecker = fn }
+
+// lookupErrorReporter, when registered (by cmd/doze), returns the REAL reason a
+// plugin engine failed to load (a failed signature, a protocol/engine-support
+// gate, a network error) recorded by the module fetcher — so an unknown-engine
+// diagnostic reads as the actual failure, not "no such engine".
+var lookupErrorReporter func(engineType string) error
+
+// SetLookupErrorReporter registers the module-load failure reporter.
+func SetLookupErrorReporter(fn func(engineType string) error) { lookupErrorReporter = fn }
+
+// remoteDecodeHint, when registered (by cmd/doze), describes the module that
+// decodes an engine type's blocks (identity + pinned version) and, best-effort,
+// whether a newer release exists — appended to remote-decode errors only. It
+// must never fail: a "" return degrades to today's bare diagnostic.
+var remoteDecodeHint func(engineType string) string
+
+// SetRemoteDecodeHint registers the decode-error annotator.
+func SetRemoteDecodeHint(fn func(engineType string) string) { remoteDecodeHint = fn }
+
+// remoteDecodeErrSuffix renders the registered hint as an error suffix.
+func remoteDecodeErrSuffix(engineType string) string {
+	if remoteDecodeHint == nil {
+		return ""
+	}
+	if h := remoteDecodeHint(engineType); h != "" {
+		return "\n  " + h
+	}
+	return ""
+}
+
 func (cfg *Config) decodeModules(parser *hclparse.Parser, block *hcl.Block, ctx *hcl.EvalContext) error {
 	var m hclModules
 	if diags := gohcl.DecodeBody(block.Body, ctx, &m); diags.HasErrors() {
 		return diagError(parser, diags)
 	}
 	mc := ModulesConfig{
-		Mirror:  m.Mirror,
-		Enabled: m.Enabled || m.Mirror != "",
-		Sources: map[string]string{},
+		Mirror:   m.Mirror,
+		Enabled:  m.Enabled || m.Mirror != "",
+		Sources:  map[string]string{},
+		Versions: map[string]string{},
 	}
 	for _, md := range m.Modules {
 		mc.Sources[md.Name] = md.Source
+		mc.Versions[md.Name] = md.Version
 	}
 	cfg.Modules = mc
 	return nil
@@ -603,8 +717,21 @@ func (cfg *Config) buildPending(parser *hclparse.Parser, block *hcl.Block, restB
 	if diags := gohcl.DecodeBody(restBody, stampCtx, &c); diags.HasErrors() {
 		return nil, diagError(parser, diags)
 	}
+	// Tell the module fetcher what engine version this block declares BEFORE the
+	// lookup below may fetch the module, so selection selects a release that
+	// supports it.
+	if engineRequirer != nil {
+		engineRequirer(block.Type, c.Version)
+	}
 	drv, ok := engine.Lookup(block.Type)
 	if !ok {
+		// The module fetcher may have a REAL failure recorded (signature, gate,
+		// network) — surface that verbatim instead of "unknown engine".
+		if lookupErrorReporter != nil {
+			if err := lookupErrorReporter(block.Type); err != nil {
+				return nil, posErr(parser, block.DefRange, err.Error(), "")
+			}
+		}
 		// The type passed the schema (any labeled block is a candidate engine) but
 		// resolves to no driver — not built in, and no module provides it.
 		detail := "no engine of this type is built in or provided by a module"
@@ -689,8 +816,8 @@ func (c *Config) InstanceAddr(decl *InstanceDecl) (string, error) {
 		"(e.g. port = 5432); doze does not auto-assign ports", decl.Type, decl.Name)
 }
 
-// Add registers an additional instance at runtime. It is used to inject
-// synthetic instances (e.g. `doze ephemeral`) that are not in the file.
+// Add registers an additional instance at runtime, for synthetic instances that
+// are not declared in the config file.
 func (c *Config) Add(decl *InstanceDecl) {
 	if c.index == nil {
 		c.index = map[string]*InstanceDecl{}

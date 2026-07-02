@@ -205,14 +205,13 @@ conflict.
 
 ```sh
 # Put an instance to sleep now (data is kept; next connect re-boots it)
-doze stop app
+doze sleep app
 
 # Wipe one instance's data and start fresh (re-provisions + converges on next boot)
-doze stop app
-rm -rf "$(doze doctor | awk '/project/{print $3}')/clusters/app"
+doze reset app
 
 # Nuke a whole project's state (stop the daemon first)
-doze stop --all
+doze down
 rm -rf "$(doze doctor | awk '/project/{print $3}')"
 
 # Reclaim disk from downloads / unused toolchains

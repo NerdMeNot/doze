@@ -22,11 +22,13 @@ Yes — it's a great fit. Either wrap your test command:
 doze run -- go test ./...
 ```
 
-or start once and reuse across steps:
+or bring the backends up once and reuse across steps — each instance listens on
+its declared, stable port, so just point your migration/test config at those URLs
+(connecting cold-boots the instance):
 
 ```sh
-eval "$(doze env)"            # connection strings (instances boot on connect)
-./migrate && ./integration-tests
+doze up                      # bring backends up; they also boot on first connect
+./migrate && ./integration-tests   # connect to the stable explicit-port URLs
 ```
 
 Commit `doze.lock` so CI downloads byte-identical binaries, or set
@@ -64,7 +66,7 @@ teammate and your CI download **byte-identical** binaries. See
 ## How do I share a setup with my team?
 
 Commit `doze.hcl` and `doze.lock`. A teammate clones the repo and runs
-`doze run -- …` (or `doze apply`) — they get the same engines, versions, databases,
+`doze run -- …` (or `doze sync`) — they get the same engines, versions, databases,
 roles, buckets, and queues, with no manual setup. Personal tweaks go in a
 gitignored `local.doze.hcl` (see
 [Files & storage](files-and-storage.md#per-developer-overrides)).
@@ -73,8 +75,9 @@ gitignored `local.doze.hcl` (see
   native binaries that sleep when idle — far less RAM, no Docker daemon, instant
   for the service you're actually using.
 - **Testcontainers** spins up containers per test run (great for CI, still needs
-  Docker). doze's `ephemeral` gives you an isolated, real database per run with no
-  container runtime; and doze also serves your everyday dev loop.
+  Docker). With doze, `doze reset <inst> && doze run -- <tests>` gives you a clean,
+  real database per run with no container runtime; and doze also serves your
+  everyday dev loop.
 - **LocalStack** emulates AWS via Python + a JVM + Docker. doze's S3/SQS/SNS are
   built into one Go binary — no Docker, no JVM.
 
@@ -93,5 +96,5 @@ That's it — doze installs nothing else system-wide.
 ## Where can I see what doze is doing?
 
 `doze status` (snapshot), `doze dash` (live, interactive), and `doze logs`
-(daemon) / `doze logs <instance>` (a backend). Run `doze start -f` in the foreground
-to watch boot and convergence in real time.
+(daemon) / `doze logs <instance>` (a backend). Run `doze up -f` to bring things up
+in the foreground and watch boot and convergence in real time.

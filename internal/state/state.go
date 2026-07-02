@@ -1,7 +1,8 @@
 // Package state persists, per project, the set of structural objects doze has
 // applied for each instance (roles, databases, buckets, queues, …). It is the
-// record `doze plan`/`apply`/`destroy` diff against: apply prunes objects that
-// were applied before but are no longer declared, and destroy prunes them all.
+// record `doze sync` diffs against: sync creates newly declared objects, updates
+// changed ones, and prunes objects that were applied before but are no longer
+// declared.
 package state
 
 import (
@@ -119,7 +120,7 @@ func Lock(path string) (unlock func(), err error) {
 			_ = os.Remove(lockPath)
 			continue
 		}
-		return nil, fmt.Errorf("another doze apply/destroy is in progress (remove %s if stale)", lockPath)
+		return nil, fmt.Errorf("another doze sync is in progress (remove %s if stale)", lockPath)
 	}
 	return nil, fmt.Errorf("could not acquire state lock %s", lockPath)
 }

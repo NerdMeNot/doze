@@ -17,9 +17,8 @@ import (
 func syncCmd() *cobra.Command {
 	var dryRun, autoApprove bool
 	cmd := &cobra.Command{
-		Use:     "sync [service]",
-		Aliases: []string{"apply"},
-		Short:   "Reconcile the stack with the config — create new, update changed, prune removed",
+		Use:   "sync [service]",
+		Short: "Reconcile the stack with the config — create new, update changed, prune removed",
 		Long: "sync brings the local environment in line with doze.hcl: it creates or\n" +
 			"updates databases, roles, schemas, extensions, buckets, queues and topics,\n" +
 			"and drops structure that was applied before but is no longer declared. A\n" +

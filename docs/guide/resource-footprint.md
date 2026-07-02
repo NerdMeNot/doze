@@ -91,10 +91,10 @@ So you can reproduce or sanity-check the numbers:
 ```sh
 # idle daemon RSS (KB) — nothing connected (run boots the daemon, no instances)
 doze run -- true
-ps -o rss= -p "$(pgrep -f 'doze start --foreground')"
+ps -o rss= -p "$(pgrep -f 'doze __daemon')"
 
 # a booted engine's RSS — boot it, then read its process
-doze start app                 # or: doze shell app
+doze wake app                  # or: doze shell app
 doze status                 # the RAM column reports the same figure
 ps -Ao rss,command | grep '/bin/postgres'
 ```

@@ -13,16 +13,21 @@ engines](../guide/engines.md)**.
 ## How every recipe works
 
 1. **Declare** instances in `doze.hcl` (or split across sibling `*.doze.hcl`).
-2. **Use** them — either let doze inject connection strings:
+2. **Use** them — every instance listens on the explicit `port` you declared, so
+   its URL is stable and deterministic. Connect a client directly to that endpoint
+   (doze boots the instance on the first connection and reaps it when idle):
    ```sh
-   doze run -- <your command>     # ensures up, injects env, runs the command
-   eval "$(doze env)"             # or export the env into your shell
+   doze run -- <your command>     # ensures backends are up, then runs the command
    ```
-   or connect a client directly to an instance's endpoint (doze boots it on the
-   first connection and reaps it when idle).
+   Three honest ways to get a connection string:
+   - write the stable URL straight into your app config / `.env`
+     (e.g. `postgresql://app:app@127.0.0.1:5432/app`, `redis://127.0.0.1:6379`,
+     `mongodb://127.0.0.1:27017/`) — connecting cold-boots the instance;
+   - declare your app as a **`process`** block — doze injects each dependency's
+     `env_var` → URL automatically;
+   - read **`.doze/endpoints.yaml`**, the machine manifest the daemon writes.
 
-Each instance gets a unique **`DOZE_<NAME>_URL`**, and the conventional variable
-for its engine when exactly one instance claims it:
+For a `process` block, the conventional `env_var` per engine is:
 
 | Engine | Conventional var |
 |---|---|
@@ -42,7 +47,7 @@ buckets, queues, topics) — never data. Your app/migrations own the data.
 - [S3](s3.md) — local object storage (buckets, multipart, presigned URLs)
 - [SQS](sqs.md) — queues, FIFO, DLQ + redrive
 - [SNS](sns.md) — topics, SNS→SQS fanout, filter policies, webhooks
-- [Workflows](workflows.md) — `run`/`env`, ephemeral test DBs, status/dash/logs, CI
+- [Workflows](workflows.md) — `run`, reset for clean test DBs, status/dash/logs, CI
 - [Config layout](config-layout.md) — splitting config across `*.doze.hcl` files + per-dev overrides
 - [Full stacks](stacks.md) — polyglot apps end to end + framework wiring
 

@@ -46,7 +46,7 @@ func (fakeProcDriver) AdvertisedAddr(inst engine.Instance) (string, bool) {
 	}
 	return "", false
 }
-func (fakeProcDriver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, _ string) (engine.EngineConfig, error) {
+func (fakeProcDriver) DecodeConfig(body hcl.Body, ctx *hcl.EvalContext, _ string, _ engine.VersionSpec) (engine.EngineConfig, error) {
 	var s struct {
 		Port int               `hcl:"port,optional"`
 		Env  map[string]string `hcl:"env,optional"`

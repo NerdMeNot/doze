@@ -23,6 +23,8 @@ import (
 
 	"github.com/doze-dev/doze-sdk/binaries"
 	"github.com/doze-dev/doze-sdk/engine"
+	"github.com/doze-dev/doze-sdk/modindex"
+	dozeplugin "github.com/doze-dev/doze-sdk/plugin"
 )
 
 // DefaultRegistryBase is the doze registry base every source resolves under:
@@ -37,9 +39,12 @@ const DefaultRegistryBase = "https://doze.nerdmenot.in/registry"
 // explicit source is given: type "postgres" -> "doze/postgres".
 const DefaultNamespace = "doze"
 
-// DefaultVersion is the index channel used when a module isn't otherwise pinned —
-// the index maps it to a full version (versions: { default: "0.1.0" }).
-const DefaultVersion = "default"
+// DefaultChannel is the release channel a fresh (unpinned) resolve follows in
+// the module index. Module versions are a different axis from the engine
+// version a user declares: selection picks the newest release compatible with
+// this doze's plugin protocol and the declared engine majors, preferring the
+// channel head.
+const DefaultChannel = "stable"
 
 // keysDoc is the per-namespace keys.json: the publisher's base64 ed25519 key.
 type keysDoc struct {
@@ -62,7 +67,19 @@ type Manager struct {
 	enabled bool              // fetch modules at all
 	base    string            // registry base URL (default or override)
 	sources map[string]string // engine type -> source address override (from modules{})
-	misses  map[string]bool   // engine types with no published module (negative cache)
+	// versions holds per-engine exact module-version pins from the modules{}
+	// block — the escape hatch for holding back a regressed release. Empty for
+	// almost everyone: selection + doze.lock do the work.
+	versions map[string]string
+	// requires accumulates the engine MAJORS declared in config per engine type
+	// (fed by config.SetEngineRequirer before the first driver lookup), so fresh
+	// module selection picks a release that supports what the project declares.
+	requires map[string]map[string]bool
+	misses   map[string]bool // engine types with no published module (negative cache)
+	// verifyErrs holds the last real failure (signature/checksum/transport) for a
+	// type, as opposed to a genuine "not published" miss. Surfaced by LastError so
+	// a fetch/verification failure reads as itself, not as "unknown engine type".
+	verifyErrs map[string]error
 
 	nsm  map[string]*binaries.Manager // memoized per-namespace fetchers (keyed by namespace)
 	keys map[string]ed25519.PublicKey // verified publisher keys (keyed by namespace)
@@ -85,17 +102,20 @@ func NewManager(home string) (*Manager, error) {
 		logf:     func(string, ...any) {},
 		enabled: os.Getenv("DOZE_MODULES") != "off", // default-on: core ships no backing engines
 		base:    base,
-		sources: map[string]string{},
-		misses:  map[string]bool{},
-		nsm:     map[string]*binaries.Manager{},
-		keys:    map[string]ed25519.PublicKey{},
+		sources:    map[string]string{},
+		versions:   map[string]string{},
+		requires:   map[string]map[string]bool{},
+		misses:     map[string]bool{},
+		verifyErrs: map[string]error{},
+		nsm:        map[string]*binaries.Manager{},
+		keys:       map[string]ed25519.PublicKey{},
 	}, nil
 }
 
 // Configure applies a decoded modules{} block: an optional registry override,
-// whether fetching is enabled, and per-engine source overrides. It runs before any
-// instance's driver is resolved.
-func (m *Manager) Configure(mirror string, enabled bool, sources map[string]string) {
+// whether fetching is enabled, per-engine source overrides, and per-engine exact
+// module-version pins. It runs before any instance's driver is resolved.
+func (m *Manager) Configure(mirror string, enabled bool, sources, versions map[string]string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if mirror != "" {
@@ -111,6 +131,39 @@ func (m *Manager) Configure(mirror string, enabled bool, sources map[string]stri
 			m.sources[k] = v
 		}
 	}
+	for k, v := range versions {
+		if v != "" {
+			m.versions[k] = v
+		}
+	}
+}
+
+// Require records that config declares engine type at the given engine version,
+// so module selection only accepts releases supporting its major. Called by the
+// config loader (via config.SetEngineRequirer) before the driver lookup that
+// triggers the fetch.
+func (m *Manager) Require(engineType, version string) {
+	if version == "" || version == "builtin" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.requires[engineType] == nil {
+		m.requires[engineType] = map[string]bool{}
+	}
+	m.requires[engineType][modindex.Major(version)] = true
+}
+
+// requiredMajors returns the sorted engine majors declared for a type.
+func (m *Manager) requiredMajors(engineType string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, 0, len(m.requires[engineType]))
+	for major := range m.requires[engineType] {
+		out = append(out, major)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SetLogger installs a progress logger for downloads.
@@ -138,47 +191,165 @@ func splitSource(source string) (ns, name string, err error) {
 	return ns, name, nil
 }
 
-// Resolve fetches (or finds cached) the plugin binary for engine type at the given
-// version spec ("" = the default channel) and returns its executable path. It
-// resolves the type's source, pins the namespace publisher key (trust-on-first-
-// use), and verifies the artifact's signature against it. When a lock is
-// configured it freezes the resolved version + checksum and the namespace key.
-func (m *Manager) Resolve(ctx context.Context, engineType, version string) (string, error) {
-	if version == "" {
-		version = DefaultVersion
-	}
+// Resolve fetches (or finds cached) the plugin binary for an engine type and
+// returns its executable path. The MODULE version is chosen here, never by the
+// user: a doze.lock pin wins (gated offline against this doze's plugin protocol
+// and the declared engine majors); otherwise the newest compatible release from
+// the signed index is selected and pinned. It resolves the type's source, pins
+// the namespace publisher key (trust-on-first-use), verifies the index-level
+// signature, and verifies each artifact's signature before running it.
+func (m *Manager) Resolve(ctx context.Context, engineType string) (string, error) {
 	source := m.sourceFor(engineType)
 	ns, name, err := splitSource(source)
 	if err != nil {
 		return "", err
 	}
 	lock := m.loadLock()
+	m.mu.Lock()
+	want := m.versions[engineType] // modules{} exact-version knob, "" for almost everyone
+	m.mu.Unlock()
+	majors := m.requiredMajors(engineType)
 
+	// Pinned path: the lock's pin wins so a moving channel can't drift. Its
+	// compatibility gates run offline from the metadata frozen at pin time, and
+	// a warm cache never touches the network — not even for keys.json.
+	if pin, ok := lock.GetModule(source); ok && (want == "" || want == pin.Version) {
+		if pin.Protocol != 0 && pin.Protocol != dozeplugin.ProtocolVersion {
+			return "", fmt.Errorf("module %s %s (pinned in doze.lock) speaks plugin protocol %d; this doze requires %d — run 'doze modules upgrade %s'",
+				source, pin.Version, pin.Protocol, dozeplugin.ProtocolVersion, engineType)
+		}
+		if len(pin.Engines) > 0 {
+			for _, major := range majors {
+				if !slices.Contains(pin.Engines, major) {
+					return "", fmt.Errorf("%s %s needs a newer %s module: pinned %s supports %s — run 'doze modules upgrade %s'",
+						engineType, major, source, pin.Version, strings.Join(pin.Engines, ", "), engineType)
+				}
+			}
+		}
+		// Warm cache: nothing to fetch, not even the index.
+		if binDir, ok := m.cachedBinDir(ns, name, pin.Version); ok {
+			return pluginExe(binDir, name, pin.Version)
+		}
+		// Cold cache: the index supplies the artifact URL; the lock's checksum
+		// stays authoritative.
+		bm, err := m.nsManager(ns, lock)
+		if err != nil {
+			return "", err
+		}
+		idx, err := m.fetchIndex(bm, ns, name)
+		if err != nil {
+			return "", err
+		}
+		rel, ok := idx.Releases[pin.Version]
+		if !ok {
+			return "", fmt.Errorf("module %s %s (pinned in doze.lock) is no longer published — run 'doze modules upgrade %s'", source, pin.Version, engineType)
+		}
+		art, ok := rel.Artifacts[m.plat.Triple]
+		if !ok {
+			return "", fmt.Errorf("module %s %s has no artifact for %s", source, pin.Version, m.plat.Triple)
+		}
+		binDir, _, err := bm.EnsureArtifact(ctx, name, pin.Version, m.plat, art.URL, art.SHA256, art.Sig, pin.Hashes[m.plat.Triple])
+		if err != nil {
+			return "", err
+		}
+		return pluginExe(binDir, name, pin.Version)
+	}
+
+	// Fresh path (no pin, or the modules{} knob overrides it): select from the
+	// verified index and freeze the choice.
 	bm, err := m.nsManager(ns, lock)
 	if err != nil {
 		return "", err
 	}
-
-	// A frozen pin wins: honor its resolved version + checksum so a moving
-	// "default" channel can't drift and a tampered archive is rejected.
-	if pin, ok := lock.GetModule(source, version); ok && pin.Resolved != "" {
-		binDir, _, err := bm.Ensure(ctx, name, pin.Resolved, m.plat, pin.Hashes[m.plat.Triple])
-		if err != nil {
-			return "", err
-		}
-		return pluginExe(binDir, name, pin.Resolved)
-	}
-
-	full, err := bm.ResolveMajor(name, version)
+	idx, err := m.fetchIndex(bm, ns, name)
 	if err != nil {
 		return "", err
 	}
-	binDir, digest, err := bm.Ensure(ctx, name, full, m.plat, "")
+	version, rel, err := m.selectRelease(idx, engineType, want, majors)
 	if err != nil {
 		return "", err
 	}
-	m.recordPin(lock, source, version, full, digest)
-	return pluginExe(binDir, name, full)
+	art, ok := rel.Artifacts[m.plat.Triple]
+	if !ok {
+		return "", fmt.Errorf("module %s %s has no artifact for %s", source, version, m.plat.Triple)
+	}
+	binDir, _, err := bm.EnsureArtifact(ctx, name, version, m.plat, art.URL, art.SHA256, art.Sig, "")
+	if err != nil {
+		return "", err
+	}
+	m.recordPin(lock, source, version, rel)
+	return pluginExe(binDir, name, version)
+}
+
+// selectRelease picks a module release: the modules{} exact pin when set (still
+// protocol- and engine-gated, with precise errors), else modindex.Select's
+// newest-compatible policy.
+func (m *Manager) selectRelease(idx *modindex.Index, engineType, want string, majors []string) (string, modindex.Release, error) {
+	if want == "" {
+		return modindex.Select(idx, dozeplugin.ProtocolVersion, majors, DefaultChannel)
+	}
+	rel, ok := idx.Releases[want]
+	if !ok {
+		return "", modindex.Release{}, fmt.Errorf("module %s/%s has no release %s (modules{} pins it); published: %s",
+			idx.Namespace, idx.Module, want, strings.Join(releaseVersions(idx), ", "))
+	}
+	if rel.Protocol != dozeplugin.ProtocolVersion {
+		return "", modindex.Release{}, fmt.Errorf("module %s/%s %s (pinned in modules{}) speaks plugin protocol %d; this doze requires %d",
+			idx.Namespace, idx.Module, want, rel.Protocol, dozeplugin.ProtocolVersion)
+	}
+	if !modindex.Supports(rel, majors) {
+		return "", modindex.Release{}, fmt.Errorf("module %s/%s %s (pinned in modules{}) supports %s %s, not the declared version(s) %s",
+			idx.Namespace, idx.Module, want, engineType, strings.Join(rel.Engines, ", "), strings.Join(majors, ", "))
+	}
+	return want, rel, nil
+}
+
+// fetchIndex fetches a module's schema-1 index and verifies its index-level
+// signature against the namespace's (TOFU-pinned) publisher key — so protocol,
+// engine support, and channel heads are attacker-controlled nowhere.
+func (m *Manager) fetchIndex(bm *binaries.Manager, ns, name string) (*modindex.Index, error) {
+	url := strings.TrimRight(m.base, "/") + "/" + ns + "/" + name + "/index.yaml"
+	body, err := bm.Fetch(url)
+	if err != nil {
+		return nil, fmt.Errorf("fetching module index %s: %w", url, err)
+	}
+	idx, err := modindex.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	if idx.Module != name {
+		return nil, fmt.Errorf("%s: index is for module %q, expected %q", url, idx.Module, name)
+	}
+	m.mu.Lock()
+	key := m.keys[ns]
+	m.mu.Unlock()
+	if key == nil {
+		return nil, fmt.Errorf("no verified publisher key for namespace %q", ns)
+	}
+	if err := modindex.Verify(idx, key); err != nil {
+		return nil, fmt.Errorf("module index for %s/%s: %w", ns, name, err)
+	}
+	return idx, nil
+}
+
+// cachedBinDir reports the content-addressed cache dir for (source, version) on
+// this platform, if its bin dir is populated. No network.
+func (m *Manager) cachedBinDir(ns, name, version string) (string, bool) {
+	binDir := filepath.Join(m.home, "modules", ns, name, version+"-"+m.plat.Triple, "bin")
+	entries, err := os.ReadDir(binDir)
+	if err != nil || len(entries) == 0 {
+		return "", false
+	}
+	return binDir, true
+}
+
+func releaseVersions(idx *modindex.Index) []string {
+	out := make([]string, 0, len(idx.Releases))
+	for v := range idx.Releases {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return modindex.CompareVersions(out[i], out[j]) > 0 })
+	return out
 }
 
 // nsManager returns the binaries.Manager scoped to a registry namespace: cache
@@ -273,16 +444,129 @@ func (m *Manager) loadLock() *binaries.Lock {
 	return lock
 }
 
-// recordPin freezes (source, spec) -> full + this platform's checksum and saves.
-func (m *Manager) recordPin(lock *binaries.Lock, source, spec, full, digest string) {
+// recordPin freezes a module source to the selected release: version, protocol,
+// engine support, and every published triple's checksum (from the verified
+// index, so teammates on other platforms verify against the same pin).
+func (m *Manager) recordPin(lock *binaries.Lock, source, version string, rel modindex.Release) {
 	if lock == nil {
 		return
 	}
-	lock.RecordModule(source, spec, engine.Pin{
-		Resolved: full, Source: source,
-		Hashes: map[string]string{m.plat.Triple: digest},
+	hashes := make(map[string]string, len(rel.Artifacts))
+	for triple, art := range rel.Artifacts {
+		hashes[triple] = "sha256:" + strings.ToLower(art.SHA256)
+	}
+	lock.RecordModule(source, binaries.ModulePin{
+		Version:  version,
+		Protocol: rel.Protocol,
+		Engines:  append([]string(nil), rel.Engines...),
+		Hashes:   hashes,
 	})
 	_ = lock.Save()
+}
+
+// Pinned returns the doze.lock pin for an engine type's source, with the source
+// address, if one exists.
+func (m *Manager) Pinned(engineType string) (binaries.ModulePin, string, bool) {
+	source := m.sourceFor(engineType)
+	lock := m.loadLock()
+	pin, ok := lock.GetModule(source)
+	return pin, source, ok
+}
+
+// CheckSupport validates one declared (engineType, engine version) against the
+// pinned module's supported engine majors — the post-decode pass that catches a
+// block whose version the already-resolved module can't serve (the first block
+// of a type drives selection; later blocks are only caught here). Offline: it
+// reads only the lock.
+func (m *Manager) CheckSupport(engineType, version string) error {
+	if version == "" || version == "builtin" || isInTree(engineType) {
+		return nil
+	}
+	if os.Getenv("DOZE_"+strings.ToUpper(engineType)+"_PLUGIN") != "" {
+		return nil // a local override bypasses the registry and its metadata
+	}
+	pin, source, ok := m.Pinned(engineType)
+	if !ok || len(pin.Engines) == 0 {
+		return nil
+	}
+	if major := modindex.Major(version); !slices.Contains(pin.Engines, major) {
+		return fmt.Errorf("%s %s needs a newer %s module: pinned %s supports %s — run 'doze modules upgrade %s'",
+			engineType, major, source, pin.Version, strings.Join(pin.Engines, ", "), engineType)
+	}
+	return nil
+}
+
+// Upgrade re-resolves an engine type's module from the registry, ignoring the
+// existing pin (but honoring a modules{} exact-version knob), downloads and
+// verifies the selected release, and rewrites the pin. It returns the old and
+// new versions; changed is false when the pin was already at the head.
+func (m *Manager) Upgrade(ctx context.Context, engineType string) (from, to string, changed bool, err error) {
+	source := m.sourceFor(engineType)
+	ns, name, err := splitSource(source)
+	if err != nil {
+		return "", "", false, err
+	}
+	lock := m.loadLock()
+	bm, err := m.nsManager(ns, lock)
+	if err != nil {
+		return "", "", false, err
+	}
+	old, hadPin := lock.GetModule(source)
+
+	idx, err := m.fetchIndex(bm, ns, name)
+	if err != nil {
+		return "", "", false, err
+	}
+	m.mu.Lock()
+	want := m.versions[engineType]
+	m.mu.Unlock()
+	version, rel, err := m.selectRelease(idx, engineType, want, m.requiredMajors(engineType))
+	if err != nil {
+		return old.Version, "", false, err
+	}
+	if hadPin && old.Version == version {
+		return old.Version, version, false, nil
+	}
+	art, ok := rel.Artifacts[m.plat.Triple]
+	if !ok {
+		return old.Version, "", false, fmt.Errorf("module %s %s has no artifact for %s", source, version, m.plat.Triple)
+	}
+	if _, _, err := bm.EnsureArtifact(ctx, name, version, m.plat, art.URL, art.SHA256, art.Sig, ""); err != nil {
+		return old.Version, "", false, err
+	}
+	m.recordPin(lock, source, version, rel)
+	return old.Version, version, true, nil
+}
+
+// UpgradeHint reports, best-effort, whether a newer compatible release exists
+// for an engine type's pinned module — appended to config-decode errors so "the
+// module doesn't know this argument" comes with its likely fix. Network errors
+// yield "" (the hint must never make an error path worse).
+func (m *Manager) UpgradeHint(engineType string) string {
+	pin, source, ok := m.Pinned(engineType)
+	if !ok {
+		return ""
+	}
+	ns, name, err := splitSource(source)
+	if err != nil {
+		return ""
+	}
+	bm, err := m.nsManager(ns, m.loadLock())
+	if err != nil {
+		return ""
+	}
+	idx, err := m.fetchIndex(bm, ns, name)
+	if err != nil {
+		return ""
+	}
+	m.mu.Lock()
+	want := m.versions[engineType]
+	m.mu.Unlock()
+	version, _, err := m.selectRelease(idx, engineType, want, m.requiredMajors(engineType))
+	if err != nil || version == pin.Version || modindex.CompareVersions(version, pin.Version) <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("a newer module (%s) is available — run 'doze modules upgrade %s'", version, engineType)
 }
 
 // Lookup adapts Resolve to the plugin resolver contract: engine type -> its module
@@ -300,15 +584,60 @@ func (m *Manager) Lookup(engineType string) (path string, env []string, ok bool)
 		return "", nil, false
 	}
 	m.mu.Unlock()
-	p, err := m.Resolve(context.Background(), engineType, "")
+	p, err := m.Resolve(context.Background(), engineType)
 	if err != nil {
-		m.logf("module %s unavailable: %v", engineType, err)
 		m.mu.Lock()
 		m.misses[engineType] = true
+		if notPublished(err) {
+			// Genuinely no such module: the caller falls back to an in-tree driver,
+			// then reports "unknown engine type", which is the right message.
+			m.logf("module %s: not published in the registry (%v)", engineType, err)
+		} else {
+			// A real failure (bad signature, checksum mismatch, network): record it
+			// so LastError can surface it verbatim instead of a misleading
+			// "unknown engine type", and log it loudly.
+			m.verifyErrs[engineType] = err
+			m.logf("module %s failed to load: %v", engineType, err)
+		}
 		m.mu.Unlock()
 		return "", nil, false
 	}
 	return p, nil, true
+}
+
+// LastError returns the real fetch/verification failure recorded for an engine
+// type (signature/checksum/transport), or nil if the type simply has no published
+// module. Callers that would otherwise report "unknown engine type" can consult
+// this to surface the actual cause.
+func (m *Manager) LastError(engineType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.verifyErrs[engineType]
+}
+
+// notPublished reports whether err means the module is genuinely absent from the
+// registry (a 404 / missing index) rather than a real verification or transport
+// failure. Absence is an expected miss (fall back to in-tree); everything else —
+// a bad signature, a checksum mismatch, a network error — is a real problem the
+// user should see.
+func notPublished(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, sig := range []string{"signature", "checksum", "sha256", "verify", "key mismatch", "untrusted"} {
+		if strings.Contains(s, sig) {
+			return false // a real verification failure, not a plain miss
+		}
+	}
+	for _, miss := range []string{"not found", "404", "no such", "no module", "does not exist", "unknown engine"} {
+		if strings.Contains(s, miss) {
+			return true
+		}
+	}
+	// Default: treat an unrecognized error as a real failure (surface it) rather
+	// than silently masking it as a miss.
+	return false
 }
 
 // isInTree reports whether an engine type is compiled into doze core (registered
@@ -317,13 +646,21 @@ func isInTree(engineType string) bool {
 	return slices.Contains(engine.Types(), engineType)
 }
 
+// InTree reports whether an engine type is compiled into doze core (and so is
+// never module-fetched, pinned, or upgraded).
+func InTree(engineType string) bool { return isInTree(engineType) }
+
 // Inspection is the result of inspecting a registry source without launching it.
 type Inspection struct {
-	Source    string
-	Namespace string
-	Name      string
-	Version   string // resolved full version
-	Platforms []PlatformStatus
+	Source      string
+	Namespace   string
+	Name        string
+	Version     string   // the inspected release (the stable head unless overridden)
+	Protocol    int      // plugin protocol that release speaks
+	Engines     []string // engine majors that release supports (empty = versionless)
+	Releases    []string // every published release, newest first
+	IndexSigned bool     // the index-level signature verifies
+	Platforms   []PlatformStatus
 }
 
 // PlatformStatus is one artifact's per-triple provenance.
@@ -334,14 +671,12 @@ type PlatformStatus struct {
 	Signed bool // sig present AND verifies against the namespace publisher key
 }
 
-// Inspect fetches a source's publisher key (pinning it trust-on-first-use) and its
-// module index, then reports each platform artifact and whether its signature
-// verifies — the same check Resolve enforces before running a module, surfaced for
-// `doze modules info`. It downloads no archives.
+// Inspect fetches a source's publisher key (pinning it trust-on-first-use) and
+// its module index, then reports the release's compatibility metadata and each
+// platform artifact's signature status — the same checks Resolve enforces before
+// running a module, surfaced for `doze modules info`. version "" inspects the
+// stable head. It downloads no archives.
 func (m *Manager) Inspect(source, version string) (*Inspection, error) {
-	if version == "" {
-		version = DefaultVersion
-	}
 	ns, name, err := splitSource(source)
 	if err != nil {
 		return nil, err
@@ -355,20 +690,33 @@ func (m *Manager) Inspect(source, version string) (*Inspection, error) {
 	key := m.keys[ns]
 	m.mu.Unlock()
 
-	man, err := bm.Manifest(name)
+	// Fetch + parse WITHOUT the hard signature gate: info exists to report a
+	// broken index, so verification is a field here, not a precondition.
+	url := strings.TrimRight(m.base, "/") + "/" + ns + "/" + name + "/index.yaml"
+	body, err := bm.Fetch(url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching module index %s: %w", url, err)
 	}
-	em, ok := man.Engines[name]
+	idx, err := modindex.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", url, err)
+	}
+	if version == "" {
+		if version = idx.Channels[DefaultChannel]; version == "" {
+			return nil, fmt.Errorf("module %s has no %q channel", source, DefaultChannel)
+		}
+	}
+	rel, ok := idx.Releases[version]
 	if !ok {
-		return nil, fmt.Errorf("registry index for %s has no engine %q", source, name)
+		return nil, fmt.Errorf("module %s has no release %s; published: %s", source, version, strings.Join(releaseVersions(idx), ", "))
 	}
-	full, ok := em.Versions[version]
-	if !ok {
-		full = version // allow an exact full version
+	insp := &Inspection{
+		Source: source, Namespace: ns, Name: name,
+		Version: version, Protocol: rel.Protocol, Engines: rel.Engines,
+		Releases:    releaseVersions(idx),
+		IndexSigned: key != nil && modindex.Verify(idx, key) == nil,
 	}
-	insp := &Inspection{Source: source, Namespace: ns, Name: name, Version: full}
-	for triple, art := range em.Artifacts[full] {
+	for triple, art := range rel.Artifacts {
 		insp.Platforms = append(insp.Platforms, PlatformStatus{
 			Triple: triple, URL: art.URL, SHA256: art.SHA256,
 			Signed: verifyArtifactSig(key, art.SHA256, art.Sig),
@@ -413,9 +761,13 @@ type CatalogNamespace struct {
 	Modules  map[string]CatalogModule `json:"modules"`
 }
 
-// CatalogModule is one published module's discovery facts (all author-declared).
+// CatalogModule is one published module's discovery facts. Version, Protocol,
+// and EngineVersions come from the signed index's stable release (code-derived
+// via dzm); the prose is author-declared meta.
 type CatalogModule struct {
 	Source         string   `json:"source"`
+	Version        string   `json:"version"`  // module version at the stable head
+	Protocol       int      `json:"protocol"` // plugin protocol that release speaks
 	Tagline        string   `json:"tagline"`
 	Category       string   `json:"category"`
 	EngineVersions []string `json:"engineVersions"`
