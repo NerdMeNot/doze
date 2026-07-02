@@ -10,9 +10,9 @@ export default defineConfig({
     starlight({
       title: "doze",
       description:
-        "Real databases on your laptop — asleep until you need them. No Docker, no JVM, no always-on stack.",
-      logo: { src: "./src/assets/logo.svg", alt: "doze" },
-      favicon: "/favicon.svg",
+        "docker-compose for local development, without the virtualization. Real engines as native processes — your machine stays cool, your debugger just attaches.",
+      logo: { src: "./src/assets/logo.png", alt: "doze" },
+      favicon: "/favicon-32.png",
       customCss: ["./src/styles/theme.css"],
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/doze-dev/doze" },
