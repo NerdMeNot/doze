@@ -41,7 +41,7 @@ engine/
 docs/                design docs (architecture, binaries, extensions)
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the pieces fit. New
+See [the architecture doc](https://doze.nerdmenot.in/reference/architecture/) for how the pieces fit. New
 engines are a driver package under `engine/` plus a registration line; the core
 does not change.
 
