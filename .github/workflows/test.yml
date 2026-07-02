@@ -3,7 +3,7 @@
 # health, tui, …) on both Linux and macOS so a regression is caught before merge.
 # The heavier end-to-end suite that boots real engine binaries is separate and
 # gated behind the `integration` build tag (see integration.yml), so it does not
-# run here.
+# run here. doze-sdk is a normal tagged dependency — plain single checkout.
 name: test
 
 on:
@@ -22,19 +22,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      # While doze-sdk is pre-release, go.mod has `replace doze-sdk => ../doze-sdk`,
-      # so the SDK is checked out as a sibling (same pattern as integration.yml and
-      # doze-modules CI). Drop both once the SDK is tagged.
       - uses: actions/checkout@v4
-        with: { path: doze }
-      - uses: actions/checkout@v4
-        with: { repository: doze-dev/doze-sdk, path: doze-sdk }
       - uses: actions/setup-go@v5
         with:
-          go-version-file: doze/go.mod
+          go-version-file: go.mod
       - name: Vet
-        working-directory: doze
         run: go vet ./...
       - name: Test
-        working-directory: doze
         run: go test -race ./...

@@ -8,9 +8,8 @@
 # be flaky against live infra, so it runs on demand + nightly rather than on every
 # PR. To make a run hermetic, pre-build a backend and pass DOZE_<ENGINE>_BINDIR.
 #
-# NOTE: while doze-sdk is pre-release, doze-modules' go.mod has `replace doze-sdk =>
-# ../doze-sdk`, so doze-sdk is checked out as a sibling too. Drop it once the SDK is
-# tagged and the replace becomes a version pin.
+# doze-sdk is a normal tagged dependency now; only doze-modules is a sibling
+# (the suite builds plugins from its source).
 name: integration
 
 on:
@@ -33,8 +32,6 @@ jobs:
         with: { path: doze }
       - uses: actions/checkout@v4
         with: { repository: doze-dev/doze-modules, path: doze-modules }
-      - uses: actions/checkout@v4
-        with: { repository: doze-dev/doze-sdk, path: doze-sdk }
       - uses: actions/setup-go@v5
         with:
           go-version-file: doze/go.mod
