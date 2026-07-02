@@ -1,6 +1,6 @@
 # Design: the doze documentation website
 
-**Status:** planned. The site source lives in this repo (`website/`); the
+**Status:** shipped (2026-07-03) — live at doze.nerdmenot.in. The site source lives in this repo (`website/`); the
 registry stays at `/registry`, served by doze-registry's own pipeline.
 
 ## Goals
